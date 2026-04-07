@@ -8,9 +8,8 @@ use yan_shared::ops::{Operation, OpPayload};
 // ── Migrations ────────────────────────────────────────────────────────────────
 
 pub async fn run_migrations(pool: &PgPool) {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS operations (
+    let stmts = [
+        "CREATE TABLE IF NOT EXISTS operations (
             op_id        UUID PRIMARY KEY,
             device_id    UUID NOT NULL,
             client_seq   BIGINT NOT NULL,
@@ -18,11 +17,10 @@ pub async fn run_migrations(pool: &PgPool) {
             received_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             payload      JSONB NOT NULL,
             UNIQUE (device_id, client_seq)
-        );
-        CREATE INDEX IF NOT EXISTS ops_received_at_idx ON operations (received_at);
-        CREATE INDEX IF NOT EXISTS ops_device_seq_idx  ON operations (device_id, client_seq);
-
-        CREATE TABLE IF NOT EXISTS snapshot (
+        )",
+        "CREATE INDEX IF NOT EXISTS ops_received_at_idx ON operations (received_at)",
+        "CREATE INDEX IF NOT EXISTS ops_device_seq_idx  ON operations (device_id, client_seq)",
+        "CREATE TABLE IF NOT EXISTS snapshot (
             item_id              UUID PRIMARY KEY,
             parent_id            UUID REFERENCES snapshot(item_id) ON DELETE CASCADE,
             position             INTEGER NOT NULL DEFAULT 0,
@@ -34,18 +32,20 @@ pub async fn run_migrations(pool: &PgPool) {
             created_at           TIMESTAMPTZ NOT NULL,
             updated_at           TIMESTAMPTZ NOT NULL,
             is_deleted           BOOLEAN NOT NULL DEFAULT FALSE
-        );
-
-        CREATE TABLE IF NOT EXISTS statuses (
+        )",
+        "CREATE TABLE IF NOT EXISTS statuses (
             name       TEXT PRIMARY KEY,
             color      TEXT NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        "#,
-    )
-    .execute(pool)
-    .await
-    .expect("Migration failed");
+        )",
+    ];
+
+    for stmt in &stmts {
+        sqlx::query(stmt)
+            .execute(pool)
+            .await
+            .expect("Migration failed");
+    }
 
     // Seed default statuses if table is empty
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM statuses")

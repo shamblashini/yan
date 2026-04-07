@@ -1,0 +1,25 @@
+# Exclude the build output — it's large and rebuilt inside the container anyway
+target/
+
+# Exclude tui assets that the server image doesn't need (but keep src/ so cargo metadata can parse the workspace)
+# Secrets must never enter the build context
+.env
+.env.local
+.env.*.local
+
+# Git history and editor files are not needed in the image
+.git/
+tui/.git/
+.gitignore
+.vscode/
+.idea/
+
+# Documentation
+README.md
+RUST_LEARNING.md
+*.md
+
+# Misc
+*.log
+*.db
+*.sqlite

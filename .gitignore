@@ -12,10 +12,16 @@ target/
 # ── Secrets and environment ───────────────────────────────────────────────────
 
 # Never commit DATABASE_URL, AUTH_TOKEN, or any other secrets.
-# Use environment variables or a local .env file that is never committed.
+# Copy .env.example to .env, fill it in, and keep it local.
 .env
 .env.local
 .env.*.local
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+
+# Docker BuildKit cache (created by `docker buildx` on the host)
+.buildx-cache/
+
 
 # ── Editors ───────────────────────────────────────────────────────────────────
 
