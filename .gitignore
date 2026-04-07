@@ -1,0 +1,97 @@
+# ── Rust / Cargo ──────────────────────────────────────────────────────────────
+
+# Build artifacts — the largest directory, never commit
+target/
+
+# Cargo.lock is intentionally tracked for binary crates (tui, server) so that
+# builds are reproducible. Remove this comment and uncomment the line below only
+# if you are publishing yan-shared as a library crate on crates.io.
+# Cargo.lock
+
+
+# ── Secrets and environment ───────────────────────────────────────────────────
+
+# Never commit DATABASE_URL, AUTH_TOKEN, or any other secrets.
+# Use environment variables or a local .env file that is never committed.
+.env
+.env.local
+.env.*.local
+
+# ── Editors ───────────────────────────────────────────────────────────────────
+
+# VS Code — workspace settings are personal; commit only if the team agrees
+.vscode/
+
+# JetBrains (RustRover, CLion, IntelliJ)
+.idea/
+
+# Vim / Neovim
+*.swp
+*.swo
+Session.vim
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Helix
+# (no files to ignore — helix keeps state outside the project)
+
+
+# ── Operating system ──────────────────────────────────────────────────────────
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.directory
+
+
+# ── Test and development databases ───────────────────────────────────────────
+
+# Ignore any SQLite databases created locally during development.
+# Production databases live in ~/.local/share/todo/ and are never in the repo.
+*.db
+*.sqlite
+*.sqlite3
+
+# Ignore migrated legacy TOML files left over from the SQLite migration.
+*.toml.migrated
+
+
+# ── Logs and profiling ────────────────────────────────────────────────────────
+
+*.log
+perf.data
+perf.data.old
+flamegraph.svg
+massif.out.*
+
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+
+lcov.info
+coverage/
+tarpaulin-report.html
+
+
+# ── Miscellaneous ─────────────────────────────────────────────────────────────
+
+# Compiled C object files (not Rust — those go in target/)
+*.o
+
+# Temporary files
+*.tmp
+*.bak
+*.orig

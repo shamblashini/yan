@@ -1,0 +1,21 @@
+[package]
+name = "todo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+yan-shared = { path = "../shared" }
+ratatui = { version = "0.30", features = ["crossterm"] }
+crossterm = "0.29"
+serde = { workspace = true }
+serde_json = "1.0"
+toml = "0.8"
+uuid = { workspace = true }
+chrono = { workspace = true }
+dirs = "5.0"
+ratatui-textarea = { version = "0.9", features = ["crossterm"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tokio = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+futures-util = "0.3"
