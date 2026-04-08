@@ -507,17 +507,20 @@ fn render_status_popup(frame: &mut Frame, size: Rect, app: &AppState) {
         let area = centered_rect(40, height, size);
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(" Set Status  [j/k] nav  [Enter] select  [Esc] cancel ")
+            .title(" Set Status  [j/k] nav  [Enter] select  [d] delete  [Esc] cancel ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
+        const BUILTINS: &[&str] = &["Todo", "In Progress", "Done", "Blocked", "Cancelled"];
         let items: Vec<ListItem> = options
             .iter()
             .enumerate()
             .map(|(i, name)| {
-                let color = if name == "+ Add new status" {
+                let is_add = name == "+ Add new status";
+                let is_builtin = BUILTINS.contains(&name.as_str());
+                let color = if is_add {
                     Color::DarkGray
                 } else {
                     app.status_map.get(name.as_str())
@@ -529,7 +532,13 @@ fn render_status_popup(frame: &mut Frame, size: Rect, app: &AppState) {
                 } else {
                     Style::default().fg(color)
                 };
-                ListItem::new(Span::styled(name.clone(), style))
+                // Append a marker for built-ins to signal they can't be deleted
+                let label = if is_builtin {
+                    format!("{name} [built-in]")
+                } else {
+                    name.clone()
+                };
+                ListItem::new(Span::styled(label, style))
             })
             .collect();
 

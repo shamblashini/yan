@@ -219,6 +219,22 @@ fn handle_status_picker_key(app: &mut AppState, key: KeyEvent) {
             app.popup = None;
             app.open_add_status();
         }
+        KeyCode::Char('d') => {
+            // Get the selected status name (guard: not the "+ Add" entry)
+            let to_remove = if let Some(PopupKind::SetStatus { ref options, selected }) = app.popup {
+                let name = options.get(selected).cloned().unwrap_or_default();
+                if name == "+ Add new status" { None } else { Some(name) }
+            } else {
+                None
+            };
+            if let Some(name) = to_remove {
+                let removed = app.remove_status(&name);
+                if removed {
+                    // Rebuild the options list in-place with the entry gone
+                    app.open_status_picker();
+                }
+            }
+        }
         KeyCode::Esc => {
             app.popup = None;
         }

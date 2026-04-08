@@ -628,6 +628,18 @@ impl AppState {
         self.emit(OpPayload::UpsertStatus { name, color });
     }
 
+    /// Remove a custom status. Built-in statuses cannot be removed.
+    /// Returns true if the status was removed.
+    pub fn remove_status(&mut self, name: &str) -> bool {
+        const BUILTINS: &[&str] = &["Todo", "In Progress", "Done", "Blocked", "Cancelled"];
+        if BUILTINS.contains(&name) {
+            return false;
+        }
+        self.status_map.remove(name);
+        storage::delete_status(&self.db, name);
+        true
+    }
+
     pub fn toggle_timer(&mut self) {
         let path = match self.current_path().cloned() {
             Some(p) => p,

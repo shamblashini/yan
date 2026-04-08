@@ -400,6 +400,10 @@ pub fn mark_ops_synced(conn: &Connection, through_seq: u64) {
     .ok();
 }
 
+pub fn delete_status(conn: &Connection, name: &str) {
+    conn.execute("DELETE FROM statuses WHERE name = ?1", params![name]).ok();
+}
+
 /// Apply a server-returned op to the local snapshot.
 /// Skips ops whose op_id is already in local_ops (already applied locally).
 pub fn apply_remote_op(conn: &Connection, op: &Operation) {
