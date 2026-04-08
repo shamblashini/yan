@@ -23,6 +23,12 @@ use sync_client::SyncStatus;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    // Handle --config wizard before starting the TUI
+    if std::env::args().any(|a| a == "--config") {
+        config::run_wizard();
+        return Ok(());
+    }
+
     // Load config (generates device_id on first run)
     let cfg = config::load();
 
@@ -36,6 +42,7 @@ async fn main() -> io::Result<()> {
     let (local_op_tx, local_op_rx) = mpsc::channel(256);
     let (remote_op_tx, remote_op_rx) = mpsc::channel::<Vec<yan_shared::ops::Operation>>(64);
     let (status_tx, status_rx) = watch::channel(SyncStatus::Disabled);
+    let (err_tx, err_rx) = mpsc::channel::<String>(16);
 
     // Spawn background sync task if configured
     if cfg.is_sync_configured() {
@@ -46,6 +53,7 @@ async fn main() -> io::Result<()> {
             local_op_rx,
             remote_op_tx,
             status_tx,
+            err_tx,
         ));
     }
 
@@ -59,6 +67,7 @@ async fn main() -> io::Result<()> {
         Some(local_op_tx),
         Some(remote_op_rx),
         Some(status_rx),
+        Some(err_rx),
     );
 
     // Setup terminal — must happen on the main thread (crossterm requirement)

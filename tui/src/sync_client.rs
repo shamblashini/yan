@@ -42,6 +42,7 @@ pub async fn run(
     mut local_op_rx: mpsc::Receiver<Operation>,
     remote_op_tx: mpsc::Sender<Vec<Operation>>,
     status_tx: watch::Sender<SyncStatus>,
+    err_tx: mpsc::Sender<String>,
 ) {
     if !config.is_sync_configured() {
         let _ = status_tx.send(SyncStatus::Disabled);
@@ -75,7 +76,7 @@ pub async fn run(
                 //  for a live reload, the TUI would need to handle this. Omitted for now.)
             }
             Err(e) => {
-                tracing_simple(format!("Bootstrap snapshot failed: {e}"));
+                let _ = err_tx.try_send(format!("Bootstrap failed: {e}"));
             }
         }
     }
@@ -182,7 +183,7 @@ pub async fn run(
                 let _ = status_tx.send(SyncStatus::Connected);
             }
             Err(e) => {
-                tracing_simple(format!("Sync failed: {e}"));
+                let _ = err_tx.try_send(format!("Sync failed: {e}"));
                 let _ = status_tx.send(SyncStatus::Offline { pending_ops: pending_count });
                 backoff_secs = (backoff_secs * 2).min(60);
             }
@@ -313,8 +314,4 @@ fn count_unsynced(db: &Connection) -> usize {
         r.get::<_, i64>(0)
     })
     .unwrap_or(0) as usize
-}
-
-fn tracing_simple(msg: String) {
-    eprintln!("[yan-sync] {msg}");
 }

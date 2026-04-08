@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use chrono::Utc;
 use ratatui_textarea::TextArea;
@@ -55,6 +56,10 @@ pub struct AppState {
     sync_status_rx: Option<watch::Receiver<SyncStatus>>,
     /// Most recent sync status, cached for rendering.
     pub sync_status: SyncStatus,
+    /// Channel for error strings from the sync task.
+    sync_err_rx: Option<mpsc::Receiver<String>>,
+    /// Current toast notification: (message, time it was set). Auto-dismisses after 5s.
+    pub sync_toast: Option<(String, Instant)>,
 }
 
 struct NewItemCtx {
@@ -74,6 +79,7 @@ impl AppState {
         local_op_tx: Option<mpsc::Sender<Operation>>,
         remote_op_rx: Option<mpsc::Receiver<Vec<Operation>>>,
         sync_status_rx: Option<watch::Receiver<SyncStatus>>,
+        sync_err_rx: Option<mpsc::Receiver<String>>,
     ) -> Self {
         let status_map: HashMap<String, Status> = statuses
             .into_iter()
@@ -101,6 +107,8 @@ impl AppState {
             remote_op_rx,
             sync_status_rx,
             sync_status: SyncStatus::Disabled,
+            sync_err_rx,
+            sync_toast: None,
         };
         app.rebuild_visible();
         app
@@ -112,6 +120,13 @@ impl AppState {
         if let Some(ref rx) = self.sync_status_rx {
             if rx.has_changed().unwrap_or(false) {
                 self.sync_status = rx.borrow().clone();
+            }
+        }
+
+        // Drain error messages — keep only the latest one, reset its timer
+        if let Some(ref mut rx) = self.sync_err_rx {
+            while let Ok(msg) = rx.try_recv() {
+                self.sync_toast = Some((msg, Instant::now()));
             }
         }
 

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -62,6 +64,13 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
             PopupKind::Help => render_help_popup(frame, size),
         }
     }
+
+    // Toast notification (sync errors) — rendered last so it floats above everything
+    if let Some((ref msg, ts)) = app.sync_toast {
+        if ts.elapsed() < Duration::from_secs(5) {
+            render_sync_toast(frame, size, msg);
+        }
+    }
 }
 
 fn render_tree(frame: &mut Frame, area: Rect, app: &mut AppState) {
@@ -74,7 +83,7 @@ fn render_tree(frame: &mut Frame, area: Rect, app: &mut AppState) {
     frame.render_widget(block, area);
 
     if app.visible_flat.is_empty() {
-        let hint = Paragraph::new("No todos. Press 'o' to add one.")
+        let hint = Paragraph::new("No todos.  a - new task | A - new child task")
             .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(hint, inner);
         return;
@@ -398,14 +407,16 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     };
 
     let mode_width = (mode_str.len() + 2) as u16;
-    let sync_width = if sync_str.is_empty() { 0 } else { (sync_str.len() + 2) as u16 };
+    // Fixed width — wide enough for "[Offline · 999 pending]" + padding.
+    // Keeping this constant prevents layout thrash as the pending count changes.
+    const SYNC_COL_WIDTH: u16 = 28;
 
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Length(mode_width),
             Constraint::Min(1),
-            Constraint::Length(sync_width),
+            Constraint::Length(SYNC_COL_WIDTH),
         ])
         .split(area);
 
@@ -422,6 +433,37 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &AppState) {
             .style(Style::default().fg(sync_color));
         frame.render_widget(sync_widget, chunks[2]);
     }
+}
+
+fn render_sync_toast(frame: &mut Frame, area: Rect, msg: &str) {
+    const POPUP_WIDTH: u16 = 38;
+    const POPUP_HEIGHT: u16 = 3;
+    if area.width < POPUP_WIDTH + 2 {
+        return;
+    }
+    let x = area.x + area.width.saturating_sub(POPUP_WIDTH + 1);
+    let y = area.y;
+    let popup_area = Rect::new(x, y, POPUP_WIDTH, POPUP_HEIGHT.min(area.height));
+
+    // Truncate message to fit inside the box (width - 2 borders - 2 padding)
+    let max_len = (POPUP_WIDTH as usize).saturating_sub(4);
+    let display = if msg.len() > max_len {
+        format!("{}…", &msg[..max_len.saturating_sub(1)])
+    } else {
+        msg.to_string()
+    };
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .title(" Sync error ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+    frame.render_widget(
+        Paragraph::new(display).style(Style::default().fg(Color::Red)),
+        inner,
+    );
 }
 
 fn centered_rect(percent_x: u16, height: u16, r: Rect) -> Rect {

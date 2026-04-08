@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -53,6 +54,71 @@ pub fn load() -> Config {
     };
     let _ = save(&cfg);
     cfg
+}
+
+/// Interactive config wizard. Runs on stdin/stdout before the TUI starts.
+/// Invoked via `yan-tui --config`.
+pub fn run_wizard() {
+    let mut cfg = load();
+    let path = config_path();
+
+    println!("yan sync configuration");
+    println!("Config file: {}", path.display());
+    println!("(Leave blank to keep existing value)\n");
+
+    let current_url = if cfg.server_url.is_empty() {
+        "none".to_string()
+    } else {
+        cfg.server_url.clone()
+    };
+    print!("Backend URL [{}]: ", current_url);
+    io::stdout().flush().unwrap();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap();
+    let input = input.trim();
+    if !input.is_empty() {
+        cfg.server_url = input.to_string();
+    }
+
+    let current_token = if cfg.auth_token.is_empty() {
+        "none".to_string()
+    } else {
+        format!("{}***", &cfg.auth_token[..cfg.auth_token.len().min(4)])
+    };
+    print!("API token [{}]: ", current_token);
+    io::stdout().flush().unwrap();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap();
+    let input = input.trim();
+    if !input.is_empty() {
+        cfg.auth_token = input.to_string();
+    }
+
+    let can_sync = !cfg.server_url.is_empty() && !cfg.auth_token.is_empty();
+    if can_sync {
+        let current_enabled = if cfg.sync_enabled { "Y/n" } else { "y/N" };
+        print!("Enable sync? [{}]: ", current_enabled);
+        io::stdout().flush().unwrap();
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        let input = input.trim().to_lowercase();
+        cfg.sync_enabled = match input.as_str() {
+            "n" | "no" => false,
+            "y" | "yes" => true,
+            "" => cfg.sync_enabled,
+            _ => cfg.sync_enabled,
+        };
+    } else {
+        cfg.sync_enabled = false;
+        if !cfg.server_url.is_empty() || !cfg.auth_token.is_empty() {
+            println!("Sync disabled: both URL and token are required.");
+        }
+    }
+
+    match save(&cfg) {
+        Ok(()) => println!("\nConfig saved to {}", path.display()),
+        Err(e) => eprintln!("\nFailed to save config: {e}"),
+    }
 }
 
 pub fn save(cfg: &Config) -> std::io::Result<()> {
