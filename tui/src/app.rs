@@ -76,6 +76,7 @@ impl AppState {
         db: Connection,
         device_id: Uuid,
         initial_seq: u64,
+        initial_collapsed: HashSet<Uuid>,
         local_op_tx: Option<mpsc::Sender<Operation>>,
         remote_op_rx: Option<mpsc::Receiver<Vec<Operation>>>,
         sync_status_rx: Option<watch::Receiver<SyncStatus>>,
@@ -91,7 +92,7 @@ impl AppState {
             mode: Mode::Normal,
             cursor_idx: 0,
             visible_flat: Vec::new(),
-            collapsed: HashSet::new(),
+            collapsed: initial_collapsed,
             tree_scroll: 0,
             search_query: None,
             pending_key: None,
@@ -571,6 +572,75 @@ impl AppState {
         }
     }
 
+    pub fn move_item_down(&mut self) {
+        let path = match self.current_path().cloned() {
+            Some(p) => p,
+            None => return,
+        };
+        let idx = *path.last().unwrap_or(&0);
+        let parent_id = if path.len() <= 1 {
+            None
+        } else {
+            item_at(&self.roots, &path[..path.len() - 1]).map(|p| p.id)
+        };
+        let (id_a, id_b) = match parent_vec_mut(&mut self.roots, &path) {
+            Some((vec, i)) => {
+                if i + 1 >= vec.len() {
+                    return;
+                }
+                let (a, b) = (vec[i].id, vec[i + 1].id);
+                vec.swap(i, i + 1);
+                (a, b)
+            }
+            None => return,
+        };
+        self.emit(OpPayload::MoveItem { item_id: id_a, new_parent_id: parent_id, new_position: (idx + 1) as u32 });
+        self.emit(OpPayload::MoveItem { item_id: id_b, new_parent_id: parent_id, new_position: idx as u32 });
+        let mut new_path = path;
+        *new_path.last_mut().unwrap() = idx + 1;
+        self.rebuild_visible();
+        if let Some(i) = self.visible_flat.iter().position(|(_, p)| p == &new_path) {
+            self.cursor_idx = i;
+            self.update_scroll();
+        }
+    }
+
+    pub fn move_item_up(&mut self) {
+        let path = match self.current_path().cloned() {
+            Some(p) => p,
+            None => return,
+        };
+        let idx = *path.last().unwrap_or(&0);
+        if idx == 0 {
+            return;
+        }
+        let parent_id = if path.len() <= 1 {
+            None
+        } else {
+            item_at(&self.roots, &path[..path.len() - 1]).map(|p| p.id)
+        };
+        let (id_a, id_b) = match parent_vec_mut(&mut self.roots, &path) {
+            Some((vec, i)) => {
+                if i == 0 {
+                    return;
+                }
+                let (a, b) = (vec[i].id, vec[i - 1].id);
+                vec.swap(i - 1, i);
+                (a, b)
+            }
+            None => return,
+        };
+        self.emit(OpPayload::MoveItem { item_id: id_a, new_parent_id: parent_id, new_position: (idx - 1) as u32 });
+        self.emit(OpPayload::MoveItem { item_id: id_b, new_parent_id: parent_id, new_position: idx as u32 });
+        let mut new_path = path;
+        *new_path.last_mut().unwrap() = idx - 1;
+        self.rebuild_visible();
+        if let Some(i) = self.visible_flat.iter().position(|(_, p)| p == &new_path) {
+            self.cursor_idx = i;
+            self.update_scroll();
+        }
+    }
+
     pub fn toggle_done(&mut self) {
         let path = match self.current_path().cloned() {
             Some(p) => p,
@@ -839,10 +909,10 @@ impl AppState {
         }
     }
 
-    /// Persist timer state and statuses to DB on exit (timers may be running
-    /// and would otherwise lose their accumulated time).
+    /// Persist timer state, statuses, and collapsed state to DB on exit.
     pub fn save_to_db(&self) {
         storage::save_tree(&self.db, &self.roots, &self.status_map);
+        storage::save_collapse_state(&self.db, &self.collapsed);
     }
 
     pub fn toggle_detail_panel(&mut self) {

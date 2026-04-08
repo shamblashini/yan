@@ -59,6 +59,10 @@ fn handle_normal_key(app: &mut AppState, key: KeyEvent) {
         KeyCode::Char('k') | KeyCode::Up    => app.move_cursor(-1),
         KeyCode::Char('h') | KeyCode::Left  => app.collapse_current(),
         KeyCode::Char('l') | KeyCode::Right => app.expand_current(),
+        KeyCode::Char('J')                  => app.move_item_down(),
+        KeyCode::Char('K')                  => app.move_item_up(),
+        KeyCode::Char('H')                  => app.dedent_item(),
+        KeyCode::Char('L')                  => app.indent_item(),
         KeyCode::Char('G')                  => app.move_to_bottom(),
         KeyCode::Char('g')                  => { app.pending_key = Some('g'); }
         KeyCode::Char('a')                  => app.add_sibling_below(),

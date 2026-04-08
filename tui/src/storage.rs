@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use rusqlite::{params, Connection, Result as SqlResult};
@@ -80,6 +80,10 @@ fn run_migrations(conn: &Connection) {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS collapse_state (
+            item_id TEXT PRIMARY KEY
+        );
         ",
     )
     .expect("Migration failed");
@@ -103,6 +107,29 @@ pub fn set_sync_state(conn: &Connection, key: &str, value: &str) {
         params![key, value],
     )
     .ok();
+}
+
+pub fn load_collapse_state(conn: &Connection) -> HashSet<Uuid> {
+    let mut stmt = match conn.prepare("SELECT item_id FROM collapse_state") {
+        Ok(s) => s,
+        Err(_) => return HashSet::new(),
+    };
+    stmt.query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .filter_map(|s| Uuid::parse_str(&s).ok())
+        .collect()
+}
+
+pub fn save_collapse_state(conn: &Connection, collapsed: &HashSet<Uuid>) {
+    conn.execute("DELETE FROM collapse_state", []).ok();
+    for id in collapsed {
+        conn.execute(
+            "INSERT INTO collapse_state (item_id) VALUES (?1)",
+            params![id.to_string()],
+        )
+        .ok();
+    }
 }
 
 pub fn next_client_seq(conn: &Connection) -> u64 {

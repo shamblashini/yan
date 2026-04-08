@@ -395,7 +395,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     } else if let Some(ref q) = app.search_query {
         format!("/{q}  (n/N: next/prev  Esc: clear)")
     } else {
-        "a:add  A:child  dd:del  e:edit  E:desc  >/<:indent  spc:done  s:status  t:timer  p:panel  /:search  ?:help  q:quit".to_string()
+        "a:add  A:child  dd:del  e:edit  E:desc  H/L:indent  J/K:move  spc:done  s:status  t:timer  p:panel  /:search  ?:help  q:quit".to_string()
     };
 
     let (sync_str, sync_color) = match &app.sync_status {
@@ -587,7 +587,7 @@ fn render_confirm_delete_popup(frame: &mut Frame, size: Rect) {
 }
 
 fn render_help_popup(frame: &mut Frame, size: Rect) {
-    let area = centered_rect(70, 24, size);
+    let area = centered_rect(70, 26, size);
     frame.render_widget(Clear, area);
     let block = Block::default()
         .title(" Help  [Esc/?/q] close ")
@@ -598,7 +598,7 @@ fn render_help_popup(frame: &mut Frame, size: Rect) {
 
     let help = vec![
         Line::from(Span::styled("Navigation", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from("  j/k       Move down/up"),
+        Line::from("  j/k       Move cursor down/up"),
         Line::from("  h/l       Collapse/Expand"),
         Line::from("  gg/G      First/Last"),
         Line::from("  Enter     Toggle collapse"),
@@ -608,7 +608,8 @@ fn render_help_popup(frame: &mut Frame, size: Rect) {
         Line::from("  A         Add child of current"),
         Line::from("  i/e       Edit title  E: Edit description"),
         Line::from("  dd        Delete (confirm)"),
-        Line::from("  >/< Arrow Indent/Dedent"),
+        Line::from("  J/K       Move task down/up (same level)"),
+        Line::from("  H/L       Dedent/Indent task  (also >/< )"),
         Line::from(""),
         Line::from(Span::styled("Status", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  Space     Toggle Done / Todo"),
@@ -618,7 +619,7 @@ fn render_help_popup(frame: &mut Frame, size: Rect) {
         Line::from("  t         Toggle timer"),
         Line::from("  T         Stop all timers"),
         Line::from(""),
-        Line::from(Span::styled("Search", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled("Search & UI", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  /         Search  n/N next/prev"),
         Line::from("  p         Toggle detail panel"),
         Line::from("  q         Save & quit"),
