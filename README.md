@@ -5,16 +5,16 @@ standalone app, or point it at a server to keep multiple devices in sync automat
 
 ```
 ┌─ Todos ────────────────────────────────────────────────────┐
-│ ▼   ○ Work                                                  │
-│   ▼   ● In Progress                                         │
+│ ▼   ○ Work                                                 │
+│   ▼   ● In Progress                                        │
 │       ▼   ○ Write documentation               ●12m 30s     │
-│               ○ README                                       │
-│               ○ API reference                               │
-│       ○ Fix login bug                                       │
-│   ▼   ○ Personal                                            │
-│         ✓ Buy groceries                                     │
-│         ○ Call dentist                                      │
-└─────────────────────────────────────────────────────────────┘
+│               ○ README                                     │
+│               ○ API reference                              │
+│       ○ Fix login bug                                      │
+│   ▼   ○ Personal                                           │
+│         ✓ Buy groceries                                    │
+│         ○ Call dentist                                     │
+└────────────────────────────────────────────────────────────┘
  NORMAL  a:add  A:child  dd:del  e:edit  t:timer  q:quit     [Synced]
 ```
 
@@ -64,7 +64,7 @@ yan/
 The three components communicate through a well-defined sync protocol:
 
 ```
-┌──────────────┐    POST /api/sync     ┌─────────────────┐
+┌──────────────┐    POST /api/sync    ┌─────────────────┐
 │   TUI        │ ──────────────────►  │                 │
 │  (device A)  │ ◄──────────────────  │  yan-server     │
 └──────────────┘    new remote ops    │  (PostgreSQL)   │
