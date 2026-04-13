@@ -1,22 +1,13 @@
-# yan
+# yan ~~lungmen~~
 
-A personal task manager with a terminal UI and optional cloud sync. Run it locally as a
-standalone app, or point it at a server to keep multiple devices in sync automatically.
+## Why?
+Because, of course you need ANOTHER todo TUI with lazy[insertutilname] syle and vim controlls. to be honest I do not care if people use it or not, I needed my infinite nesting and I WILL GET IT, I like my tasks properly nested, also was kind of needing the sync.
+*I will now proceed to force everyone to used it via advanced comoputer hypnosis*
 
-```
-┌─ Todos ────────────────────────────────────────────────────┐
-│ ▼   ○ Work                                                 │
-│   ▼   ● In Progress                                        │
-│       ▼   ○ Write documentation               ●12m 30s     │
-│               ○ README                                     │
-│               ○ API reference                              │
-│       ○ Fix login bug                                      │
-│   ▼   ○ Personal                                           │
-│         ✓ Buy groceries                                    │
-│         ○ Call dentist                                     │
-└────────────────────────────────────────────────────────────┘
- NORMAL  a:add  A:child  dd:del  e:edit  t:timer  q:quit     [Synced]
-```
+## preview
+<img width="616" height="1029" alt="image" src="https://github.com/user-attachments/assets/e85c9aaa-c8d3-41cf-b247-4e5b8469d8b0" />
+
+the rest is written by AI, read at your own risk
 
 ---
 
@@ -193,8 +184,8 @@ The TUI has three modes shown in the bottom-left badge:
 | `i` / `e` | Edit the current task's title |
 | `E` | Edit the current task's description |
 | `dd` | Delete current task and all its children (with confirmation) |
-| `>` / `→` (after `>`) | Indent — make current item a child of the item above |
-| `<` | Dedent — promote current item one level up |
+| `L` / `→` (after `>`) | Indent — make current item a child of the item above |
+| `H` | Dedent — promote current item one level up |
 
 When you add or edit a title, a popup appears:
 - `Enter` — confirm and save
