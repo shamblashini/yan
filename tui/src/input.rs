@@ -170,11 +170,15 @@ fn handle_edit_title_key(app: &mut AppState, key: KeyEvent) {
             app.mode = Mode::Normal;
             if !text.is_empty() {
                 app.apply_edit_title(text);
+            } else {
+                // Empty title on Enter — cancel (removes new-item placeholder)
+                app.cancel_edit_title();
             }
         }
         KeyCode::Esc => {
             app.popup = None;
             app.mode = Mode::Normal;
+            app.cancel_edit_title();
         }
         _ => {
             if let Some(PopupKind::EditTitle { ref mut textarea }) = app.popup {

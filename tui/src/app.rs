@@ -1067,14 +1067,14 @@ impl AppState {
         if idx >= self.views.len() {
             return;
         }
+        let was_active = self.active_view == Some(idx);
+        // Deactivate first if this view is active (restores real roots)
+        if was_active {
+            self.deactivate_view();
+        }
         let name = self.views[idx].name.clone();
         storage::delete_view(&self.db, &name);
         self.views.remove(idx);
-        if self.active_view == Some(idx) {
-            self.active_view = None;
-            self.view_item_tab.clear();
-            self.rebuild_visible();
-        }
     }
 
     pub fn toggle_timer(&mut self) {
@@ -1130,6 +1130,16 @@ impl AppState {
         ta.move_cursor(ratatui_textarea::CursorMove::End);
         self.popup = Some(PopupKind::EditTitle { textarea: ta });
         self.mode = Mode::Insert;
+    }
+
+    /// Cancel an in-progress title edit. If a new item placeholder exists, remove it.
+    pub fn cancel_edit_title(&mut self) {
+        if let Some(_ctx) = self.pending_new_item.take() {
+            // Remove the placeholder item from the tree
+            if let Some(path) = self.current_path().cloned() {
+                self.delete_at_path_no_op(&path);
+            }
+        }
     }
 
     pub fn apply_edit_title(&mut self, title: String) {
@@ -1279,27 +1289,19 @@ impl AppState {
     }
 
     /// Persist timer state, statuses, and collapsed state to DB on exit.
-    pub fn save_to_db(&self) {
+    pub fn save_to_db(&mut self) {
+        // If in a view, deactivate it first so self.roots has real tab data
         if self.active_view.is_some() {
-            // In view mode, self.roots is synthetic. Save from tab_roots only.
-            storage::save_tree(
-                &self.db,
-                &self.tabs,
-                &self.tab_roots,
-                Uuid::nil(), // No active tab roots in self.roots
-                &[],
-                &self.status_map,
-            );
-        } else {
-            storage::save_tree(
-                &self.db,
-                &self.tabs,
-                &self.tab_roots,
-                self.active_tab_id(),
-                &self.roots,
-                &self.status_map,
-            );
+            self.deactivate_view();
         }
+        storage::save_tree(
+            &self.db,
+            &self.tabs,
+            &self.tab_roots,
+            self.active_tab_id(),
+            &self.roots,
+            &self.status_map,
+        );
         storage::save_collapse_state(&self.db, &self.collapsed);
     }
 
