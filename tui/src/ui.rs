@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use unicode_width::UnicodeWidthStr;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -127,85 +128,171 @@ fn render_tree(frame: &mut Frame, area: Rect, app: &mut AppState) {
     }
 
     let search = app.search_query.clone();
-    let items: Vec<ListItem> = app
+    let available_width = inner.width as usize;
+
+    // Collect visible row data for two-pass rendering (needed for tag alignment).
+    struct RowData {
+        prefix_width: usize,
+        tags: Vec<(String, Color)>,
+        time_str: String,
+        timer_running: bool,
+        spans_before_tags: Vec<(String, Style)>,
+    }
+
+    let visible: Vec<_> = app
         .visible_flat
         .iter()
         .enumerate()
         .skip(app.tree_scroll)
         .take(height)
-        .map(|(i, (depth, path))| {
-            let item = match item_at(&app.roots, path) {
-                Some(it) => it,
-                None => return ListItem::new(""),
-            };
-            let indent = "  ".repeat(*depth);
-            let icon = status_icon(&item.status);
-            let status_color = parse_color(
-                app.status_map
-                    .get(&item.status)
-                    .map(|s| s.color.as_str())
-                    .unwrap_or("white"),
-            );
-            let timer_icon = if item.timer.is_running() { "●" } else { "" };
-            let total = total_elapsed(item);
-            let time_str = if total.num_seconds() > 0 || item.timer.is_running() {
-                format!(" {}{}", timer_icon, format_duration(total))
-            } else {
-                String::new()
-            };
-            let has_children = !item.children.is_empty();
-            let collapsed = app.collapsed.contains(&item.id);
-            let collapse_icon = if has_children {
-                if collapsed { "▶ " } else { "▼ " }
-            } else {
-                "  "
-            };
+        .collect();
 
-            let is_selected = i == app.cursor_idx;
-            let title_style = if is_selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::White)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
+    let mut rows: Vec<RowData> = Vec::with_capacity(visible.len());
 
-            // Highlight search match
-            let title_spans = if let Some(ref q) = search {
-                if !q.is_empty() {
-                    highlight_match(&item.title, q, is_selected)
-                } else {
-                    vec![Span::styled(item.title.clone(), title_style)]
-                }
-            } else {
-                vec![Span::styled(item.title.clone(), title_style)]
-            };
-
-            let mut spans = vec![
-                Span::raw(indent),
-                Span::styled(collapse_icon, if is_selected { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default().fg(Color::DarkGray) }),
-                Span::styled(format!("{} ", icon), Style::default().fg(status_color)),
-            ];
-            spans.extend(title_spans);
-            for tag in &item.tags {
-                let tag_color = tag_to_color(tag);
-                spans.push(Span::styled(
-                    format!(" [{}]", tag),
-                    Style::default().fg(tag_color),
-                ));
+    for &(i, (depth, path)) in &visible {
+        let item = match item_at(&app.roots, path) {
+            Some(it) => it,
+            None => {
+                rows.push(RowData {
+                    prefix_width: 0,
+                    tags: vec![],
+                    time_str: String::new(),
+                    timer_running: false,
+                    spans_before_tags: vec![("".into(), Style::default())],
+                });
+                continue;
             }
-            if !time_str.is_empty() {
-                let time_style = if item.timer.is_running() {
+        };
+        let indent = "  ".repeat(*depth);
+        let icon = status_icon(&item.status);
+        let status_color = parse_color(
+            app.status_map
+                .get(&item.status)
+                .map(|s| s.color.as_str())
+                .unwrap_or("white"),
+        );
+        let timer_icon = if item.timer.is_running() { "●" } else { "" };
+        let total = total_elapsed(item);
+        let time_str = if total.num_seconds() > 0 || item.timer.is_running() {
+            format!(" {}{}", timer_icon, format_duration(total))
+        } else {
+            String::new()
+        };
+        let has_children = !item.children.is_empty();
+        let collapsed = app.collapsed.contains(&item.id);
+        let collapse_icon = if has_children {
+            if collapsed { "▶ " } else { "▼ " }
+        } else {
+            "  "
+        };
+
+        let is_selected = i == app.cursor_idx;
+        let title_style = if is_selected {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        let title_spans: Vec<(String, Style)> = if let Some(ref q) = search {
+            if !q.is_empty() {
+                highlight_match(&item.title, q, is_selected)
+                    .into_iter()
+                    .map(|s| (s.content.to_string(), s.style))
+                    .collect()
+            } else {
+                vec![(item.title.clone(), title_style)]
+            }
+        } else {
+            vec![(item.title.clone(), title_style)]
+        };
+
+        let select_indicator = if is_selected { "❯ " } else { "  " };
+        let select_style = if is_selected { Style::default().fg(Color::Cyan) } else { Style::default() };
+
+        let mut spans_before_tags: Vec<(String, Style)> = vec![
+            (select_indicator.into(), select_style),
+            (indent, Style::default()),
+            (collapse_icon.into(), Style::default().fg(Color::DarkGray)),
+            (format!("{} ", icon), Style::default().fg(status_color)),
+        ];
+        spans_before_tags.extend(title_spans);
+
+        let prefix_width: usize = spans_before_tags.iter().map(|(s, _)| s.width()).sum();
+
+        let tags: Vec<(String, Color)> = item
+            .tags
+            .iter()
+            .map(|t| (format!("[{}]", t), tag_to_color(t)))
+            .collect();
+
+        rows.push(RowData {
+            prefix_width,
+            tags,
+            time_str,
+            timer_running: item.timer.is_running(),
+            spans_before_tags,
+        });
+    }
+
+    // Compute the tag alignment column: max prefix width among rows that have tags,
+    // but cap it so tags + padding still fit within the available width.
+    let max_prefix = rows
+        .iter()
+        .filter(|r| !r.tags.is_empty())
+        .map(|r| r.prefix_width)
+        .max()
+        .unwrap_or(0);
+
+    let max_tag_width: usize = rows
+        .iter()
+        .filter(|r| !r.tags.is_empty())
+        .map(|r| {
+            let tags_w: usize = r.tags.iter().map(|(t, _)| t.width() + 1).sum::<usize>();
+            tags_w
+        })
+        .max()
+        .unwrap_or(0);
+
+    // Align column with at least 2 chars gap. If it would push tags off-screen, reduce it.
+    let tag_col = if max_tag_width + max_prefix + 2 > available_width {
+        available_width.saturating_sub(max_tag_width + 1)
+    } else {
+        max_prefix + 2
+    };
+
+    let items: Vec<ListItem> = rows
+        .into_iter()
+        .map(|row| {
+            let mut spans: Vec<Span> = row
+                .spans_before_tags
+                .iter()
+                .map(|(s, style)| Span::styled(s.clone(), *style))
+                .collect();
+
+            if !row.tags.is_empty() {
+                let padding = tag_col.saturating_sub(row.prefix_width);
+                if padding > 0 {
+                    spans.push(Span::raw(" ".repeat(padding)));
+                }
+                for (j, (tag_text, tag_color)) in row.tags.iter().enumerate() {
+                    let sep = if j > 0 { " " } else { "" };
+                    spans.push(Span::styled(
+                        format!("{}{}", sep, tag_text),
+                        Style::default().fg(*tag_color),
+                    ));
+                }
+            }
+
+            if !row.time_str.is_empty() {
+                let time_style = if row.timer_running {
                     Style::default().fg(Color::Yellow)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
-                spans.push(Span::styled(time_str, time_style));
+                spans.push(Span::styled(row.time_str.clone(), time_style));
             }
 
-            let bg = if is_selected { Color::White } else { Color::Reset };
-            ListItem::new(Line::from(spans)).style(Style::default().bg(bg))
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
@@ -219,7 +306,7 @@ fn highlight_match<'a>(title: &str, query: &str, is_selected: bool) -> Vec<Span<
     let lower_query = query.to_lowercase();
     let mut last = 0;
     let base_style = if is_selected {
-        Style::default().fg(Color::Black).bg(Color::White)
+        Style::default().add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
