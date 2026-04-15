@@ -44,6 +44,10 @@ RUN cargo build --release -p yan-server
 # The final image contains only the binary and its runtime system dependencies.
 FROM debian:bookworm-slim AS runtime
 
+LABEL org.opencontainers.image.source="https://github.com/shamblashini/yan"
+LABEL org.opencontainers.image.description="Yan sync server"
+LABEL org.opencontainers.image.licenses="MIT"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
