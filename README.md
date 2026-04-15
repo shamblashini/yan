@@ -32,10 +32,13 @@ the rest is written by AI, read at your own risk
 ## Features
 
 - **Hierarchical tasks** — nest todos to any depth; collapse and expand branches
+- **Tabs** — separate todo lists switchable as tabs; each tab has its own tree of tasks
+- **Tags** — coloured keyword labels on tasks, rendered as `[tag]` badges; deterministic per-tag colours
+- **Views** — filter tasks by tag across all tabs; interactable virtual views shown alongside tabs
 - **Custom statuses** — ship with Todo / In Progress / Done / Blocked / Cancelled; add your own with any colour
 - **Time tracking** — per-task timer with aggregate time rolled up through parent tasks
-- **Detail panel** — sidebar or bottom strip showing status, timestamps, children progress, description
-- **Search** — live filter across all task titles with next/previous match navigation
+- **Detail panel** — sidebar or bottom strip showing status, timestamps, children progress, tags, description
+- **Search** — live filter across all task titles and tag names with next/previous match navigation
 - **Offline-first sync** — changes apply instantly to local storage; background sync to server with no perceptible delay
 - **Live sync** — connected devices see each other's changes within ~1 second over WebSocket
 - **Conflict resolution** — divergent offline edits are merged automatically when devices reconnect
@@ -184,8 +187,9 @@ The TUI has three modes shown in the bottom-left badge:
 | `i` / `e` | Edit the current task's title |
 | `E` | Edit the current task's description |
 | `dd` | Delete current task and all its children (with confirmation) |
-| `L` / `→` (after `>`) | Indent — make current item a child of the item above |
-| `H` | Dedent — promote current item one level up |
+| `L` / `>` | Indent — make current item a child of the item above |
+| `H` / `<` | Dedent — promote current item one level up |
+| `J` / `K` | Move task down/up among siblings |
 
 When you add or edit a title, a popup appears:
 - `Enter` — confirm and save
@@ -194,6 +198,55 @@ When you add or edit a title, a popup appears:
 When you edit a description, a multi-line popup appears:
 - `Esc` — confirm and save
 - `Ctrl-C` — cancel
+
+### Normal Mode — Tags
+
+| Key | Action |
+|---|---|
+| `#` | Open tag editor on the current task |
+
+Inside the tag editor popup:
+- Type a tag name and press `Enter` to add it
+- `↑` / `↓` — navigate existing tags
+- `Ctrl+d` — remove the selected tag
+- `Esc` — confirm and close
+
+Tags appear as coloured `[tag]` badges after the task title. Each tag gets a
+deterministic colour from a palette so the same tag always looks the same. Tags
+are also matched by the `/` search.
+
+### Normal Mode — Tabs
+
+| Key | Action |
+|---|---|
+| `Tab` | Switch to the next tab |
+| `Shift+Tab` | Switch to the previous tab |
+| `c` | Create a new tab |
+| `r` | Rename the current tab |
+| `m` | Move the current task to another tab (picker) |
+| `X` | Delete the current tab and all its items (with confirmation) |
+
+The tab bar appears at the top of the screen when you have more than one tab (or
+any views). The active tab is highlighted. Every new installation starts with a
+single "Default" tab; existing data is migrated into it automatically.
+
+### Normal Mode — Views
+
+| Key | Action |
+|---|---|
+| `v` | Open the view picker |
+| `Esc` | Exit the active view and return to normal tab mode |
+
+Views let you see all tasks with a given tag across every tab. Inside the view
+picker:
+- `j` / `k` — navigate
+- `Enter` — activate the selected view, or create a new one
+- `d` — delete the selected view
+- `Esc` — cancel
+
+Views are shown in the tab bar after the real tabs, styled in cyan. While a view
+is active the tree title shows `View: <tag>` and only matching items are listed.
+Views are stored locally and are not synced between devices.
 
 ### Normal Mode — Status and Timers
 
@@ -208,14 +261,14 @@ Changing a parent's status applies recursively to all children.
 When all children of a task are Done, the parent auto-completes.
 When any child becomes not Done, the parent reverts to In Progress.
 
-### Normal Mode — Search and View
+### Normal Mode — Search and UI
 
 | Key | Action |
 |---|---|
-| `/` | Start search — type to filter titles live |
+| `/` | Start search — type to filter titles and tags live |
 | `n` | Next search match |
 | `N` | Previous search match |
-| `Esc` | Clear search |
+| `Esc` | Clear search (or exit view if one is active) |
 | `p` | Toggle detail panel (sidebar or bottom strip) |
 | `?` | Show help popup |
 | `q` | Save and quit |
@@ -244,6 +297,7 @@ Toggle with `p`. Shows:
 - Created and updated timestamps
 - Children progress (`n/m done`)
 - Timer — own time, total time (including children), running indicator
+- Tags (coloured badges)
 - Full description
 
 In sidebar mode (wide terminals): tree on the left, detail on the right.
@@ -385,14 +439,18 @@ All operations follow the same envelope:
 
 | `type` | Fields | Description |
 |---|---|---|
-| `create_item` | `item_id`, `parent_id` (nullable), `position`, `title`, `status` | Create a new task |
+| `create_item` | `item_id`, `parent_id` (nullable), `position`, `title`, `status`, `tags`, `tab_id` | Create a new task |
 | `update_title` | `item_id`, `title` | Rename a task |
 | `update_description` | `item_id`, `description` (nullable) | Set or clear description |
 | `update_status` | `item_id`, `status`, `recursive` (bool) | Change status |
+| `update_tags` | `item_id`, `tags` (array) | Replace all tags on a task |
 | `delete_item` | `item_id` | Delete task and all children |
 | `move_item` | `item_id`, `new_parent_id` (nullable), `new_position` | Re-parent or re-order |
 | `timer_start` | `item_id`, `started_at` | Start timer |
 | `timer_stop` | `item_id`, `stopped_at`, `session_secs` | Stop timer; records session duration |
+| `create_tab` | `tab_id`, `name`, `color`, `position` | Create a new tab |
+| `rename_tab` | `tab_id`, `name` | Rename a tab |
+| `delete_tab` | `tab_id` | Delete a tab and all its items |
 | `upsert_status` | `name`, `color` | Create or update a custom status |
 
 ---
@@ -430,14 +488,17 @@ without losing anything.
 
 `~/.local/share/todo/todo.db` (Linux) · `~/Library/Application Support/todo/todo.db` (macOS) · `%APPDATA%\todo\todo.db` (Windows)
 
-The database has four tables:
+The database has these tables:
 
 | Table | Contents |
 |---|---|
-| `snapshot` | Current state of all tasks (rebuilt from operations) |
+| `snapshot` | Current state of all tasks with `tab_id` and `tags` columns |
+| `tabs` | Tab definitions (id, name, colour, position) |
 | `statuses` | Custom and default status definitions |
 | `local_ops` | Append-only log of every local mutation; `synced=0` means pending |
 | `sync_state` | Key/value pairs: `device_id`, `server_cursor`, etc. |
+| `collapse_state` | Set of collapsed item UUIDs |
+| `tag_views` | Locally-stored tag view definitions (not synced) |
 
 The `snapshot` table is a cache — it can be fully rebuilt by replaying `local_ops`.
 You can back up the whole database with a simple file copy while the TUI is not running.
