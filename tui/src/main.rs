@@ -34,7 +34,7 @@ async fn main() -> io::Result<()> {
 
     // Open SQLite database, run migrations, migrate from legacy TOML if present
     let db = storage::open_db();
-    let (roots, statuses) = storage::load_state(&db);
+    let (tabs, tab_roots, statuses) = storage::load_state(&db);
     let initial_collapsed = storage::load_collapse_state(&db);
     let initial_seq = storage::next_client_seq(&db);
     let db_path = storage::db_path();
@@ -60,7 +60,8 @@ async fn main() -> io::Result<()> {
 
     // Build AppState
     let mut app = AppState::new(
-        roots,
+        tabs,
+        tab_roots,
         statuses,
         db,
         cfg.device_id,

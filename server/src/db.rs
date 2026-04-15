@@ -147,10 +147,11 @@ struct OpRow {
 
 pub async fn apply_op_to_snapshot(pool: &PgPool, op: &Operation) {
     match &op.payload {
-        OpPayload::CreateItem { item_id, parent_id, position, title, status } => {
+        OpPayload::CreateItem { item_id, parent_id, position, title, status, tags, .. } => {
+            let tags_json = serde_json::to_value(tags).unwrap_or_else(|_| serde_json::json!([]));
             sqlx::query(
-                "INSERT INTO snapshot (item_id, parent_id, position, title, status, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                "INSERT INTO snapshot (item_id, parent_id, position, title, status, tags, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                  ON CONFLICT (item_id) DO NOTHING",
             )
             .bind(item_id)
@@ -158,6 +159,7 @@ pub async fn apply_op_to_snapshot(pool: &PgPool, op: &Operation) {
             .bind(*position as i32)
             .bind(title)
             .bind(status)
+            .bind(&tags_json)
             .bind(op.happened_at)
             .bind(op.happened_at)
             .execute(pool)
@@ -251,6 +253,50 @@ pub async fn apply_op_to_snapshot(pool: &PgPool, op: &Operation) {
             .await
             .ok();
         }
+        OpPayload::UpdateTags { item_id, tags } => {
+            let tags_json = serde_json::to_value(tags).unwrap_or_else(|_| serde_json::json!([]));
+            sqlx::query(
+                "UPDATE snapshot SET tags = $1, updated_at = $2 WHERE item_id = $3 AND NOT is_deleted",
+            )
+            .bind(&tags_json)
+            .bind(op.happened_at)
+            .bind(item_id)
+            .execute(pool)
+            .await
+            .ok();
+        }
+        OpPayload::CreateTab { tab_id, name, color, position } => {
+            sqlx::query(
+                "INSERT INTO tabs (tab_id, name, color, position) VALUES ($1, $2, $3, $4) ON CONFLICT (tab_id) DO NOTHING",
+            )
+            .bind(tab_id)
+            .bind(name)
+            .bind(color)
+            .bind(*position as i32)
+            .execute(pool)
+            .await
+            .ok();
+        }
+        OpPayload::RenameTab { tab_id, name } => {
+            sqlx::query("UPDATE tabs SET name = $1 WHERE tab_id = $2")
+            .bind(name)
+            .bind(tab_id)
+            .execute(pool)
+            .await
+            .ok();
+        }
+        OpPayload::DeleteTab { tab_id } => {
+            sqlx::query("UPDATE snapshot SET is_deleted = true WHERE tab_id = $1")
+            .bind(tab_id)
+            .execute(pool)
+            .await
+            .ok();
+            sqlx::query("DELETE FROM tabs WHERE tab_id = $1")
+            .bind(tab_id)
+            .execute(pool)
+            .await
+            .ok();
+        }
         OpPayload::UpsertStatus { name, color } => {
             sqlx::query(
                 "INSERT INTO statuses (name, color) VALUES ($1, $2)
@@ -305,6 +351,7 @@ pub async fn get_snapshot(pool: &PgPool) -> (Vec<TodoItem>, Vec<Status>) {
         title: String,
         description: Option<String>,
         status: String,
+        tags: serde_json::Value,
         accumulated_secs: i64,
         timer_running_since: Option<DateTime<Utc>>,
         created_at: DateTime<Utc>,
@@ -313,6 +360,7 @@ pub async fn get_snapshot(pool: &PgPool) -> (Vec<TodoItem>, Vec<Status>) {
 
     let rows = sqlx::query_as::<_, SnapshotRow>(
         "SELECT item_id, parent_id, position, title, description, status,
+                COALESCE(tags, '[]'::jsonb) as tags,
                 accumulated_secs, timer_running_since, created_at, updated_at
          FROM snapshot
          WHERE NOT is_deleted
@@ -334,6 +382,7 @@ pub async fn get_snapshot(pool: &PgPool) -> (Vec<TodoItem>, Vec<Status>) {
                 title: r.title.clone(),
                 description: r.description.clone(),
                 status: r.status.clone(),
+                tags: serde_json::from_value(r.tags.clone()).unwrap_or_default(),
                 children: Vec::new(),
                 timer: TimerState {
                     accumulated_secs: r.accumulated_secs,

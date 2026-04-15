@@ -40,6 +40,10 @@ pub enum OpPayload {
         position: u32,
         title: String,
         status: String,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
+        tab_id: Option<Uuid>,
     },
     /// Rename a todo item.
     UpdateTitle {
@@ -78,6 +82,27 @@ pub enum OpPayload {
         item_id: Uuid,
         stopped_at: DateTime<Utc>,
         session_secs: i64,
+    },
+    /// Update the tags on an item (full replacement).
+    UpdateTags {
+        item_id: Uuid,
+        tags: Vec<String>,
+    },
+    /// Create a new tab.
+    CreateTab {
+        tab_id: Uuid,
+        name: String,
+        color: String,
+        position: u32,
+    },
+    /// Rename a tab.
+    RenameTab {
+        tab_id: Uuid,
+        name: String,
+    },
+    /// Delete a tab and all its items.
+    DeleteTab {
+        tab_id: Uuid,
     },
     /// Create or update a custom status definition.
     UpsertStatus {

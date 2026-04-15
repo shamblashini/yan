@@ -16,16 +16,38 @@ use crate::todo::{
 use tokio::sync::{mpsc, watch};
 use yan_shared::ops::{Operation, OpPayload};
 
+pub struct TagView {
+    pub name: String,
+    pub tag_filter: String,
+}
+
 pub enum PopupKind {
     EditTitle { textarea: TextArea<'static> },
     EditDescription { textarea: TextArea<'static> },
     SetStatus { options: Vec<String>, selected: usize },
     AddStatus { textarea: TextArea<'static>, color_buf: String },
     ConfirmDelete,
+    EditTags { textarea: TextArea<'static>, existing: Vec<String>, selected: usize },
+    CreateTabName { textarea: TextArea<'static> },
+    RenameTab { textarea: TextArea<'static> },
+    TabPicker { options: Vec<(String, usize)>, selected: usize },
+    ConfirmDeleteTab,
+    ViewPicker { options: Vec<String>, selected: usize },
+    CreateView { textarea: TextArea<'static> },
     Help,
 }
 
 pub struct AppState {
+    // ── Tabs ────────────────────────────────────────────────────────────────
+    pub tabs: Vec<crate::todo::Tab>,
+    pub tab_roots: HashMap<Uuid, Vec<TodoItem>>,
+    pub active_tab_idx: usize,
+    // ── Views ───────────────────────────────────────────────────────────────
+    pub views: Vec<TagView>,
+    pub active_view: Option<usize>,
+    /// When in view mode: maps item_id to the tab_id that owns it.
+    view_item_tab: HashMap<Uuid, Uuid>,
+    // ── Active tab data (swapped on tab switch) ─────────────────────────────
     pub roots: Vec<TodoItem>,
     pub status_map: HashMap<String, Status>,
     pub mode: Mode,
@@ -71,7 +93,8 @@ struct NewItemCtx {
 
 impl AppState {
     pub fn new(
-        roots: Vec<TodoItem>,
+        tabs: Vec<crate::todo::Tab>,
+        mut tab_roots: HashMap<Uuid, Vec<TodoItem>>,
         statuses: Vec<Status>,
         db: Connection,
         device_id: Uuid,
@@ -86,7 +109,23 @@ impl AppState {
             .into_iter()
             .map(|s| (s.name.clone(), s))
             .collect();
+        // Load the first tab's roots as the active roots
+        let active_tab_id = tabs.first().map(|t| t.id).unwrap_or(crate::todo::DEFAULT_TAB_ID);
+        let roots = tab_roots.remove(&active_tab_id).unwrap_or_default();
+        // Load views from DB
+        let view_rows = storage::load_views(&db);
+        let views: Vec<TagView> = view_rows
+            .into_iter()
+            .map(|(name, tag_filter)| TagView { name, tag_filter })
+            .collect();
+
         let mut app = Self {
+            tabs,
+            tab_roots,
+            active_tab_idx: 0,
+            views,
+            active_view: None,
+            view_item_tab: HashMap::new(),
             roots,
             status_map,
             mode: Mode::Normal,
@@ -158,12 +197,13 @@ impl AppState {
     fn apply_remote_op_in_memory(&mut self, op: &Operation) {
         use crate::todo::set_status_recursive;
         match &op.payload {
-            OpPayload::CreateItem { item_id, parent_id, position, title, status } => {
+            OpPayload::CreateItem { item_id, parent_id, position, title, status, tags, .. } => {
                 let new_item = TodoItem {
                     id: *item_id,
                     title: title.clone(),
                     description: None,
                     status: status.clone(),
+                    tags: tags.clone(),
                     children: Vec::new(),
                     timer: yan_shared::models::TimerState::default(),
                     created_at: op.happened_at,
@@ -233,6 +273,32 @@ impl AppState {
                     item.timer.running_since = None;
                 }
             }
+            OpPayload::UpdateTags { item_id, tags } => {
+                if let Some(item) = find_item_by_id_mut(&mut self.roots, item_id) {
+                    item.tags = tags.clone();
+                    item.updated_at = op.happened_at;
+                }
+            }
+            OpPayload::CreateTab { tab_id, name, color, position } => {
+                if !self.tabs.iter().any(|t| t.id == *tab_id) {
+                    self.tabs.push(crate::todo::Tab {
+                        id: *tab_id,
+                        name: name.clone(),
+                        color: color.clone(),
+                        position: *position,
+                    });
+                    self.tab_roots.insert(*tab_id, Vec::new());
+                }
+            }
+            OpPayload::RenameTab { tab_id, name } => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == *tab_id) {
+                    tab.name = name.clone();
+                }
+            }
+            OpPayload::DeleteTab { tab_id } => {
+                self.tabs.retain(|t| t.id != *tab_id);
+                self.tab_roots.remove(tab_id);
+            }
             OpPayload::UpsertStatus { name, color } => {
                 self.status_map.insert(
                     name.clone(),
@@ -260,9 +326,18 @@ impl AppState {
     pub fn rebuild_visible(&mut self) {
         self.visible_flat.clear();
         let search = self.search_query.as_deref();
-        for (i, root) in self.roots.iter().enumerate() {
-            flatten_node(root, &[i], 0, &self.collapsed, &mut self.visible_flat, search);
+
+        if self.active_view.is_some() {
+            // View mode: self.roots contains the filtered view items
+            for (i, root) in self.roots.iter().enumerate() {
+                flatten_node(root, &[i], 0, &self.collapsed, &mut self.visible_flat, search);
+            }
+        } else {
+            for (i, root) in self.roots.iter().enumerate() {
+                flatten_node(root, &[i], 0, &self.collapsed, &mut self.visible_flat, search);
+            }
         }
+
         if !self.visible_flat.is_empty() && self.cursor_idx >= self.visible_flat.len() {
             self.cursor_idx = self.visible_flat.len() - 1;
         }
@@ -710,6 +785,298 @@ impl AppState {
         true
     }
 
+    // ── Tabs ─────────────────────────────────────────────────────────────
+
+    pub fn active_tab_id(&self) -> Uuid {
+        self.tabs.get(self.active_tab_idx).map(|t| t.id).unwrap_or(crate::todo::DEFAULT_TAB_ID)
+    }
+
+    pub fn active_tab_name(&self) -> &str {
+        self.tabs.get(self.active_tab_idx).map(|t| t.name.as_str()).unwrap_or("Default")
+    }
+
+    pub fn switch_to_tab(&mut self, idx: usize) {
+        if idx == self.active_tab_idx || idx >= self.tabs.len() {
+            return;
+        }
+        // Save current tab's roots
+        let old_tab_id = self.active_tab_id();
+        let old_roots = std::mem::take(&mut self.roots);
+        self.tab_roots.insert(old_tab_id, old_roots);
+        // Load new tab's roots
+        self.active_tab_idx = idx;
+        let new_tab_id = self.active_tab_id();
+        self.roots = self.tab_roots.remove(&new_tab_id).unwrap_or_default();
+        self.cursor_idx = 0;
+        self.tree_scroll = 0;
+        self.rebuild_visible();
+    }
+
+    pub fn next_tab(&mut self) {
+        if self.tabs.len() > 1 {
+            let next = (self.active_tab_idx + 1) % self.tabs.len();
+            self.switch_to_tab(next);
+        }
+    }
+
+    pub fn prev_tab(&mut self) {
+        if self.tabs.len() > 1 {
+            let prev = if self.active_tab_idx == 0 {
+                self.tabs.len() - 1
+            } else {
+                self.active_tab_idx - 1
+            };
+            self.switch_to_tab(prev);
+        }
+    }
+
+    pub fn create_tab(&mut self, name: String) {
+        let position = self.tabs.len() as u32;
+        let tab = crate::todo::Tab::new(name.clone(), position);
+        let tab_id = tab.id;
+        let color = tab.color.clone();
+        self.tabs.push(tab);
+        self.tab_roots.insert(tab_id, Vec::new());
+        self.emit(OpPayload::CreateTab {
+            tab_id,
+            name,
+            color,
+            position,
+        });
+        // Switch to the new tab
+        self.switch_to_tab(self.tabs.len() - 1);
+    }
+
+    pub fn open_create_tab(&mut self) {
+        let ta = new_textarea("");
+        self.popup = Some(PopupKind::CreateTabName { textarea: ta });
+        self.mode = Mode::Insert;
+    }
+
+    pub fn apply_create_tab(&mut self, name: String) {
+        if !name.is_empty() {
+            self.create_tab(name);
+        }
+        self.status_message = None;
+    }
+
+    pub fn open_rename_tab(&mut self) {
+        let current_name = self.active_tab_name().to_string();
+        let mut ta = new_textarea(&current_name);
+        ta.move_cursor(ratatui_textarea::CursorMove::End);
+        self.popup = Some(PopupKind::RenameTab { textarea: ta });
+        self.mode = Mode::Insert;
+    }
+
+    pub fn apply_rename_tab(&mut self, name: String) {
+        if name.is_empty() {
+            return;
+        }
+        let tab_id = self.active_tab_id();
+        if let Some(tab) = self.tabs.get_mut(self.active_tab_idx) {
+            tab.name = name.clone();
+        }
+        self.emit(OpPayload::RenameTab { tab_id, name });
+    }
+
+    pub fn open_confirm_delete_tab(&mut self) {
+        if self.tabs.len() <= 1 {
+            self.status_message = Some("Cannot delete the last tab".into());
+            return;
+        }
+        self.popup = Some(PopupKind::ConfirmDeleteTab);
+    }
+
+    pub fn delete_current_tab(&mut self) {
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        let tab_id = self.active_tab_id();
+        self.tabs.remove(self.active_tab_idx);
+        // Don't need to remove from tab_roots since active tab roots are in self.roots
+        self.emit(OpPayload::DeleteTab { tab_id });
+        // Switch to previous tab or first
+        let new_idx = if self.active_tab_idx >= self.tabs.len() {
+            self.tabs.len() - 1
+        } else {
+            self.active_tab_idx
+        };
+        // Load the new active tab's roots
+        self.active_tab_idx = new_idx;
+        let new_tab_id = self.active_tab_id();
+        self.roots = self.tab_roots.remove(&new_tab_id).unwrap_or_default();
+        self.cursor_idx = 0;
+        self.tree_scroll = 0;
+        self.rebuild_visible();
+    }
+
+    pub fn open_move_to_tab(&mut self) {
+        if self.tabs.len() <= 1 || self.visible_flat.is_empty() {
+            return;
+        }
+        let options: Vec<(String, usize)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != self.active_tab_idx)
+            .map(|(i, t)| (t.name.clone(), i))
+            .collect();
+        if options.is_empty() {
+            return;
+        }
+        self.popup = Some(PopupKind::TabPicker { options, selected: 0 });
+    }
+
+    pub fn move_item_to_tab(&mut self, target_tab_idx: usize) {
+        let path = match self.current_path().cloned() {
+            Some(p) => p,
+            None => return,
+        };
+        // Remove item from current tree
+        let (vec, idx) = match parent_vec_mut(&mut self.roots, &path) {
+            Some(v) => v,
+            None => return,
+        };
+        let item = vec.remove(idx);
+        let target_tab_id = self.tabs[target_tab_idx].id;
+        // Insert into target tab's roots
+        let target_roots = self.tab_roots.entry(target_tab_id).or_default();
+        let _position = target_roots.len() as u32;
+        target_roots.push(item);
+        // Fix cursor
+        if self.cursor_idx >= self.visible_flat.len().saturating_sub(1) && self.cursor_idx > 0 {
+            self.cursor_idx -= 1;
+        }
+        self.rebuild_visible();
+    }
+
+    // ── Tags ─────────────────────────────────────────────────────────────
+
+    pub fn open_tag_editor(&mut self) {
+        let existing = self
+            .current_item()
+            .map(|i| i.tags.clone())
+            .unwrap_or_default();
+        let ta = new_textarea("");
+        self.popup = Some(PopupKind::EditTags {
+            textarea: ta,
+            existing,
+            selected: 0,
+        });
+        self.mode = Mode::Insert;
+    }
+
+    pub fn apply_tags(&mut self, tags: Vec<String>) {
+        let path = match self.current_path().cloned() {
+            Some(p) => p,
+            None => return,
+        };
+        let item_id = match item_at(&self.roots, &path) {
+            Some(i) => i.id,
+            None => return,
+        };
+        if let Some(item) = item_at_mut(&mut self.roots, &path) {
+            item.tags = tags.clone();
+            item.updated_at = Utc::now();
+        }
+        self.emit(OpPayload::UpdateTags { item_id, tags });
+        self.rebuild_visible();
+    }
+
+    // ── Views ────────────────────────────────────────────────────────────
+
+    pub fn open_view_picker(&mut self) {
+        let mut options: Vec<String> = self.views.iter().map(|v| v.name.clone()).collect();
+        options.push("+ New view...".to_string());
+        self.popup = Some(PopupKind::ViewPicker { options, selected: 0 });
+    }
+
+    pub fn activate_view(&mut self, idx: usize) {
+        if idx >= self.views.len() {
+            return;
+        }
+        // If already in a view, deactivate first to restore tab roots
+        if self.active_view.is_some() {
+            self.deactivate_view();
+        }
+        // Save current tab's roots
+        let tab_id = self.active_tab_id();
+        let tab_roots = std::mem::take(&mut self.roots);
+        self.tab_roots.insert(tab_id, tab_roots);
+
+        self.active_view = Some(idx);
+        self.rebuild_view_roots();
+        self.cursor_idx = 0;
+        self.tree_scroll = 0;
+        self.rebuild_visible();
+    }
+
+    pub fn deactivate_view(&mut self) {
+        if self.active_view.is_some() {
+            self.active_view = None;
+            self.view_item_tab.clear();
+            // Restore active tab's roots
+            let tab_id = self.active_tab_id();
+            self.roots = self.tab_roots.remove(&tab_id).unwrap_or_default();
+            self.cursor_idx = 0;
+            self.tree_scroll = 0;
+            self.rebuild_visible();
+        }
+    }
+
+    /// Build self.roots from all tabs' items matching the active view's tag filter.
+    fn rebuild_view_roots(&mut self) {
+        let tag_filter = match self.active_view.and_then(|i| self.views.get(i)) {
+            Some(v) => v.tag_filter.clone(),
+            None => return,
+        };
+        self.view_item_tab.clear();
+        let mut items = Vec::new();
+        for tab in &self.tabs {
+            let roots = self.tab_roots.get(&tab.id).map(|r| r.as_slice()).unwrap_or(&[]);
+            collect_tagged_items(roots, &tag_filter, &mut items, tab.id, &mut self.view_item_tab);
+        }
+        self.roots = items;
+    }
+
+    pub fn open_create_view(&mut self) {
+        let ta = new_textarea("");
+        self.popup = Some(PopupKind::CreateView { textarea: ta });
+        self.mode = Mode::Insert;
+    }
+
+    pub fn apply_create_view(&mut self, tag: String) {
+        if tag.is_empty() {
+            return;
+        }
+        // Don't create duplicate
+        if self.views.iter().any(|v| v.tag_filter == tag) {
+            return;
+        }
+        let view = TagView {
+            name: tag.clone(),
+            tag_filter: tag.clone(),
+        };
+        storage::save_view(&self.db, &view.name, &view.tag_filter);
+        self.views.push(view);
+        // Activate the newly created view
+        self.activate_view(self.views.len() - 1);
+    }
+
+    pub fn delete_view(&mut self, idx: usize) {
+        if idx >= self.views.len() {
+            return;
+        }
+        let name = self.views[idx].name.clone();
+        storage::delete_view(&self.db, &name);
+        self.views.remove(idx);
+        if self.active_view == Some(idx) {
+            self.active_view = None;
+            self.view_item_tab.clear();
+            self.rebuild_visible();
+        }
+    }
+
     pub fn toggle_timer(&mut self) {
         let path = match self.current_path().cloned() {
             Some(p) => p,
@@ -788,6 +1155,8 @@ impl AppState {
                     position: ctx.position,
                     title,
                     status: ctx.status,
+                    tags: Vec::new(),
+                    tab_id: Some(self.active_tab_id()),
                 });
             }
         } else {
@@ -911,7 +1280,26 @@ impl AppState {
 
     /// Persist timer state, statuses, and collapsed state to DB on exit.
     pub fn save_to_db(&self) {
-        storage::save_tree(&self.db, &self.roots, &self.status_map);
+        if self.active_view.is_some() {
+            // In view mode, self.roots is synthetic. Save from tab_roots only.
+            storage::save_tree(
+                &self.db,
+                &self.tabs,
+                &self.tab_roots,
+                Uuid::nil(), // No active tab roots in self.roots
+                &[],
+                &self.status_map,
+            );
+        } else {
+            storage::save_tree(
+                &self.db,
+                &self.tabs,
+                &self.tab_roots,
+                self.active_tab_id(),
+                &self.roots,
+                &self.status_map,
+            );
+        }
         storage::save_collapse_state(&self.db, &self.collapsed);
     }
 
@@ -948,6 +1336,27 @@ fn remove_item_by_id(items: &mut Vec<TodoItem>, id: &Uuid) -> Option<TodoItem> {
         }
     }
     None
+}
+
+/// Collect items (and their subtrees) that have the given tag.
+fn collect_tagged_items(
+    items: &[TodoItem],
+    tag: &str,
+    out: &mut Vec<TodoItem>,
+    tab_id: Uuid,
+    item_tab_map: &mut HashMap<Uuid, Uuid>,
+) {
+    for item in items {
+        if item.tags.iter().any(|t| t == tag) {
+            item_tab_map.insert(item.id, tab_id);
+            // Clone the item without children (flatten for view)
+            let mut view_item = item.clone();
+            view_item.children.clear();
+            out.push(view_item);
+        }
+        // Also check children
+        collect_tagged_items(&item.children, tag, out, tab_id, item_tab_map);
+    }
 }
 
 /// Stop all running timers, emitting a TimerStop op for each one.

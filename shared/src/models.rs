@@ -4,6 +4,42 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// ── Tab ──────────────────────────────────────────────────────────────────────
+
+/// A well-known UUID used for the default tab when migrating from single-list.
+pub const DEFAULT_TAB_ID: Uuid = Uuid::from_bytes([
+    0xDE, 0xFA, 0x01, 0x7A, 0xB0, 0x00, 0x40, 0x00,
+    0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+]);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tab {
+    pub id: Uuid,
+    pub name: String,
+    pub color: String,
+    pub position: u32,
+}
+
+impl Tab {
+    pub fn new(name: impl Into<String>, position: u32) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            color: "white".into(),
+            position,
+        }
+    }
+
+    pub fn default_tab() -> Self {
+        Self {
+            id: DEFAULT_TAB_ID,
+            name: "Default".into(),
+            color: "white".into(),
+            position: 0,
+        }
+    }
+}
+
 // ── Status ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -79,6 +115,8 @@ pub struct TodoItem {
     pub title: String,
     pub description: Option<String>,
     pub status: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub children: Vec<TodoItem>,
     pub timer: TimerState,
     pub created_at: DateTime<Utc>,
@@ -93,6 +131,7 @@ impl TodoItem {
             title: title.into(),
             description: None,
             status: default_status.to_string(),
+            tags: Vec::new(),
             children: Vec::new(),
             timer: TimerState::default(),
             created_at: now,
@@ -190,6 +229,9 @@ pub fn flatten_node(
 fn subtree_matches(item: &TodoItem, query: &str) -> bool {
     let q = query.to_lowercase();
     if item.title.to_lowercase().contains(&q) {
+        return true;
+    }
+    if item.tags.iter().any(|t| t.to_lowercase().contains(&q)) {
         return true;
     }
     item.children.iter().any(|c| subtree_matches(c, &q))

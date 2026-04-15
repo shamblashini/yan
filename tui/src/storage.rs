@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use rusqlite::{params, Connection, Result as SqlResult};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
-use serde_json;
 
 use yan_shared::models::{Status, TodoItem, TimerState};
 use yan_shared::ops::{Operation, OpPayload};
@@ -87,6 +86,33 @@ fn run_migrations(conn: &Connection) {
         ",
     )
     .expect("Migration failed");
+
+    // Incremental migrations
+    // Add tags column to snapshot
+    conn.execute_batch("ALTER TABLE snapshot ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+        .ok();
+    // Add tab_id column to snapshot
+    let default_tab_id = yan_shared::models::DEFAULT_TAB_ID.to_string();
+    conn.execute(
+        &format!("ALTER TABLE snapshot ADD COLUMN tab_id TEXT NOT NULL DEFAULT '{}'", default_tab_id),
+        [],
+    ).ok();
+    // Create tabs table
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tabs (
+            tab_id   TEXT PRIMARY KEY,
+            name     TEXT NOT NULL,
+            color    TEXT NOT NULL DEFAULT 'white',
+            position INTEGER NOT NULL DEFAULT 0
+        )",
+    ).expect("tabs table creation failed");
+    // Create tag_views table (local only, not synced)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tag_views (
+            name       TEXT PRIMARY KEY,
+            tag_filter TEXT NOT NULL
+        )",
+    ).expect("tag_views table creation failed");
 }
 
 // ── Sync state helpers ────────────────────────────────────────────────────────
@@ -132,6 +158,64 @@ pub fn save_collapse_state(conn: &Connection, collapsed: &HashSet<Uuid>) {
     }
 }
 
+// ── Tab helpers ──────────────────────────────────────────────────────────────
+
+use yan_shared::models::Tab;
+
+pub fn load_tabs(conn: &Connection) -> Vec<Tab> {
+    let mut stmt = match conn.prepare("SELECT tab_id, name, color, position FROM tabs ORDER BY position") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map([], |row| {
+        Ok(Tab {
+            id: Uuid::parse_str(&row.get::<_, String>(0)?).unwrap_or_else(|_| Uuid::new_v4()),
+            name: row.get(1)?,
+            color: row.get(2)?,
+            position: row.get::<_, i64>(3)? as u32,
+        })
+    })
+    .unwrap()
+    .filter_map(|r| r.ok())
+    .collect()
+}
+
+pub fn save_tabs(conn: &Connection, tabs: &[Tab]) {
+    conn.execute("DELETE FROM tabs", []).ok();
+    for tab in tabs {
+        conn.execute(
+            "INSERT INTO tabs (tab_id, name, color, position) VALUES (?1, ?2, ?3, ?4)",
+            params![tab.id.to_string(), tab.name, tab.color, tab.position as i64],
+        )
+        .ok();
+    }
+}
+
+// ── View helpers ─────────────────────────────────────────────────────────────
+
+pub fn load_views(conn: &Connection) -> Vec<(String, String)> {
+    let mut stmt = match conn.prepare("SELECT name, tag_filter FROM tag_views ORDER BY name") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+}
+
+pub fn save_view(conn: &Connection, name: &str, tag_filter: &str) {
+    conn.execute(
+        "INSERT OR REPLACE INTO tag_views (name, tag_filter) VALUES (?1, ?2)",
+        params![name, tag_filter],
+    )
+    .ok();
+}
+
+pub fn delete_view(conn: &Connection, name: &str) {
+    conn.execute("DELETE FROM tag_views WHERE name = ?1", params![name]).ok();
+}
+
 pub fn next_client_seq(conn: &Connection) -> u64 {
     let max: Option<i64> = conn
         .query_row("SELECT MAX(client_seq) FROM local_ops", [], |r| r.get(0))
@@ -144,7 +228,7 @@ pub fn next_client_seq(conn: &Connection) -> u64 {
 
 /// Load the current state: rebuild the todo tree from the snapshot table plus
 /// any pending (unsynced) local ops on top.
-pub fn load_state(conn: &Connection) -> (Vec<TodoItem>, Vec<Status>) {
+pub fn load_state(conn: &Connection) -> (Vec<Tab>, HashMap<Uuid, Vec<TodoItem>>, Vec<Status>) {
     // 1. Load statuses
     let statuses = load_statuses(conn);
     if statuses.is_empty() {
@@ -157,19 +241,26 @@ pub fn load_state(conn: &Connection) -> (Vec<TodoItem>, Vec<Status>) {
     }
     let statuses = load_statuses(conn);
 
-    // 2. Load snapshot
+    // 2. Load tabs (seed default if none exist)
+    let mut tabs = load_tabs(conn);
+    if tabs.is_empty() {
+        tabs.push(Tab::default_tab());
+        save_tabs(conn, &tabs);
+    }
+
+    // 3. Load snapshot
     let mut items_map = load_snapshot_map(conn);
 
-    // 3. Apply pending local ops on top (they may not have round-tripped yet)
+    // 4. Apply pending local ops on top (they may not have round-tripped yet)
     let pending_ops = load_pending_ops(conn);
     for op in &pending_ops {
         apply_op_to_map(&mut items_map, op);
     }
 
-    // 4. Build tree from flat map
-    let roots = build_tree(items_map);
+    // 5. Build per-tab trees
+    let tab_roots = build_tab_trees(items_map, &tabs);
 
-    (roots, statuses)
+    (tabs, tab_roots, statuses)
 }
 
 fn load_statuses(conn: &Connection) -> Vec<Status> {
@@ -205,6 +296,8 @@ struct SnapshotRow {
     title: String,
     description: Option<String>,
     status: String,
+    tags: String,
+    tab_id: String,
     accumulated_secs: i64,
     timer_running_since: Option<String>,
     created_at: String,
@@ -216,7 +309,8 @@ fn load_snapshot_map(conn: &Connection) -> HashMap<String, SnapshotRow> {
     let mut stmt = conn
         .prepare(
             "SELECT item_id, parent_id, position, title, description, status,
-                    accumulated_secs, timer_running_since, created_at, updated_at, is_deleted
+                    accumulated_secs, timer_running_since, created_at, updated_at, is_deleted,
+                    tags, tab_id
              FROM snapshot
              WHERE is_deleted = 0
              ORDER BY position",
@@ -238,6 +332,8 @@ fn load_snapshot_map(conn: &Connection) -> HashMap<String, SnapshotRow> {
                 let v: i64 = row.get(10)?;
                 v != 0
             },
+            tags: row.get::<_, String>(11).unwrap_or_else(|_| "[]".to_string()),
+            tab_id: row.get::<_, String>(12).unwrap_or_else(|_| yan_shared::models::DEFAULT_TAB_ID.to_string()),
         })
     })
     .unwrap()
@@ -279,7 +375,7 @@ fn load_pending_ops(conn: &Connection) -> Vec<Operation> {
 
 fn apply_op_to_map(map: &mut HashMap<String, SnapshotRow>, op: &Operation) {
     match &op.payload {
-        OpPayload::CreateItem { item_id, parent_id, position, title, status } => {
+        OpPayload::CreateItem { item_id, parent_id, position, title, status, tags, tab_id } => {
             let now = op.happened_at.to_rfc3339();
             map.entry(item_id.to_string()).or_insert_with(|| SnapshotRow {
                 item_id: item_id.to_string(),
@@ -288,6 +384,8 @@ fn apply_op_to_map(map: &mut HashMap<String, SnapshotRow>, op: &Operation) {
                 title: title.clone(),
                 description: None,
                 status: status.clone(),
+                tags: serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string()),
+                tab_id: tab_id.unwrap_or(yan_shared::models::DEFAULT_TAB_ID).to_string(),
                 accumulated_secs: 0,
                 timer_running_since: None,
                 created_at: now.clone(),
@@ -351,8 +449,17 @@ fn apply_op_to_map(map: &mut HashMap<String, SnapshotRow>, op: &Operation) {
                 row.timer_running_since = None;
             }
         }
-        OpPayload::UpsertStatus { .. } => {
-            // Handled separately; statuses aren't in the item map
+        OpPayload::UpdateTags { item_id, tags } => {
+            if let Some(row) = map.get_mut(&item_id.to_string()) {
+                row.tags = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
+                row.updated_at = op.happened_at.to_rfc3339();
+            }
+        }
+        OpPayload::UpsertStatus { .. } |
+        OpPayload::CreateTab { .. } |
+        OpPayload::RenameTab { .. } |
+        OpPayload::DeleteTab { .. } => {
+            // Handled separately; not in the item map
         }
     }
 }
@@ -370,26 +477,38 @@ fn collect_subtree_ids(map: &HashMap<String, SnapshotRow>, root_id: &str) -> Vec
     result
 }
 
-fn build_tree(map: HashMap<String, SnapshotRow>) -> Vec<TodoItem> {
+fn build_tab_trees(map: HashMap<String, SnapshotRow>, tabs: &[Tab]) -> HashMap<Uuid, Vec<TodoItem>> {
     let mut all: Vec<SnapshotRow> = map.into_values().filter(|r| !r.is_deleted).collect();
     all.sort_by_key(|r| r.position);
-    build_children(&all, None)
+    let mut result = HashMap::new();
+    for tab in tabs {
+        let tab_id_str = tab.id.to_string();
+        // Root items for this tab: items whose tab_id matches AND have no parent (or parent is in a different tab)
+        let roots = build_children_for_tab(&all, None, &tab_id_str);
+        result.insert(tab.id, roots);
+    }
+    result
 }
 
-fn build_children(all: &[SnapshotRow], parent_id: Option<&str>) -> Vec<TodoItem> {
+fn build_children_for_tab(all: &[SnapshotRow], parent_id: Option<&str>, tab_id: &str) -> Vec<TodoItem> {
     all.iter()
-        .filter(|r| r.parent_id.as_deref() == parent_id)
+        .filter(|r| {
+            r.parent_id.as_deref() == parent_id &&
+            (parent_id.is_some() || r.tab_id == tab_id) // Only filter by tab for root items
+        })
         .map(|r| {
             let timer = TimerState {
                 accumulated_secs: r.accumulated_secs,
                 running_since: r.timer_running_since.as_ref().and_then(|s| s.parse().ok()),
             };
-            let children = build_children(all, Some(&r.item_id));
+            let children = build_children_for_tab(all, Some(&r.item_id), tab_id);
+            let tags: Vec<String> = serde_json::from_str(&r.tags).unwrap_or_default();
             TodoItem {
                 id: Uuid::parse_str(&r.item_id).unwrap_or_else(|_| Uuid::new_v4()),
                 title: r.title.clone(),
                 description: r.description.clone(),
                 status: r.status.clone(),
+                tags,
                 children,
                 timer,
                 created_at: r.created_at.parse().unwrap_or_else(|_| Utc::now()),
@@ -398,6 +517,7 @@ fn build_children(all: &[SnapshotRow], parent_id: Option<&str>) -> Vec<TodoItem>
         })
         .collect()
 }
+
 
 // ── Write ops ─────────────────────────────────────────────────────────────────
 
@@ -451,18 +571,22 @@ pub fn apply_remote_op(conn: &Connection, op: &Operation) {
 
 fn update_snapshot(conn: &Connection, op: &Operation) {
     match &op.payload {
-        OpPayload::CreateItem { item_id, parent_id, position, title, status } => {
+        OpPayload::CreateItem { item_id, parent_id, position, title, status, tags, tab_id } => {
             let now = op.happened_at.to_rfc3339();
+            let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
+            let tid = tab_id.unwrap_or(yan_shared::models::DEFAULT_TAB_ID).to_string();
             conn.execute(
                 "INSERT OR IGNORE INTO snapshot
-                 (item_id, parent_id, position, title, status, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 (item_id, parent_id, position, title, status, tags, tab_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     item_id.to_string(),
                     parent_id.map(|u| u.to_string()),
                     *position as i64,
                     title,
                     status,
+                    tags_json,
+                    tid,
                     now,
                     now,
                 ],
@@ -520,6 +644,41 @@ fn update_snapshot(conn: &Connection, op: &Operation) {
             conn.execute(
                 "UPDATE snapshot SET accumulated_secs = accumulated_secs + ?1, timer_running_since = NULL WHERE item_id = ?2",
                 params![session_secs, item_id.to_string()],
+            )
+            .ok();
+        }
+        OpPayload::UpdateTags { item_id, tags } => {
+            let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
+            conn.execute(
+                "UPDATE snapshot SET tags = ?1, updated_at = ?2 WHERE item_id = ?3",
+                params![tags_json, op.happened_at.to_rfc3339(), item_id.to_string()],
+            )
+            .ok();
+        }
+        OpPayload::CreateTab { tab_id, name, color, position } => {
+            conn.execute(
+                "INSERT OR IGNORE INTO tabs (tab_id, name, color, position) VALUES (?1, ?2, ?3, ?4)",
+                params![tab_id.to_string(), name, color, *position as i64],
+            )
+            .ok();
+        }
+        OpPayload::RenameTab { tab_id, name } => {
+            conn.execute(
+                "UPDATE tabs SET name = ?1 WHERE tab_id = ?2",
+                params![name, tab_id.to_string()],
+            )
+            .ok();
+        }
+        OpPayload::DeleteTab { tab_id } => {
+            // Delete all items in this tab
+            conn.execute(
+                "UPDATE snapshot SET is_deleted = 1 WHERE tab_id = ?1",
+                params![tab_id.to_string()],
+            )
+            .ok();
+            conn.execute(
+                "DELETE FROM tabs WHERE tab_id = ?1",
+                params![tab_id.to_string()],
             )
             .ok();
         }
@@ -586,7 +745,10 @@ fn delete_subtree_in_db(conn: &Connection, item_id: &str) {
 /// (e.g. on graceful exit with unsaved timer changes).
 pub fn save_tree(
     conn: &Connection,
-    roots: &[TodoItem],
+    tabs: &[Tab],
+    tab_roots: &HashMap<Uuid, Vec<TodoItem>>,
+    active_tab_id: Uuid,
+    active_roots: &[TodoItem],
     statuses: &HashMap<String, yan_shared::models::Status>,
 ) {
     // Clear and rebuild statuses
@@ -598,23 +760,33 @@ pub fn save_tree(
         )
         .ok();
     }
+    // Save tabs
+    save_tabs(conn, tabs);
     // Clear snapshot and rewrite
     conn.execute("DELETE FROM snapshot", []).ok();
-    save_items(conn, roots, None, 0);
+    for tab in tabs {
+        let roots = if tab.id == active_tab_id {
+            active_roots
+        } else {
+            tab_roots.get(&tab.id).map(|r| r.as_slice()).unwrap_or(&[])
+        };
+        save_items(conn, roots, None, 0, &tab.id.to_string());
+    }
 }
 
-fn save_items(conn: &Connection, items: &[TodoItem], parent_id: Option<Uuid>, start_pos: i64) {
+fn save_items(conn: &Connection, items: &[TodoItem], parent_id: Option<Uuid>, start_pos: i64, tab_id: &str) {
     for (i, item) in items.iter().enumerate() {
         let position = start_pos + i as i64;
         let timer_running_since: Option<String> = item
             .timer
             .running_since
             .map(|dt| dt.to_rfc3339());
+        let tags_json = serde_json::to_string(&item.tags).unwrap_or_else(|_| "[]".to_string());
         conn.execute(
             "INSERT OR REPLACE INTO snapshot
-             (item_id, parent_id, position, title, description, status,
+             (item_id, parent_id, position, title, description, status, tags, tab_id,
               accumulated_secs, timer_running_since, created_at, updated_at, is_deleted)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0)",
             params![
                 item.id.to_string(),
                 parent_id.map(|u| u.to_string()),
@@ -622,6 +794,8 @@ fn save_items(conn: &Connection, items: &[TodoItem], parent_id: Option<Uuid>, st
                 item.title,
                 item.description,
                 item.status,
+                tags_json,
+                tab_id,
                 item.timer.accumulated_secs,
                 timer_running_since,
                 item.created_at.to_rfc3339(),
@@ -629,7 +803,7 @@ fn save_items(conn: &Connection, items: &[TodoItem], parent_id: Option<Uuid>, st
             ],
         )
         .ok();
-        save_items(conn, &item.children, Some(item.id), 0);
+        save_items(conn, &item.children, Some(item.id), 0, tab_id);
     }
 }
 
@@ -674,7 +848,7 @@ fn try_migrate_from_toml(conn: &Connection) -> bool {
     }
 
     // Import todos
-    save_items(conn, &file.todos, None, 0);
+    save_items(conn, &file.todos, None, 0, &yan_shared::models::DEFAULT_TAB_ID.to_string());
 
     // Rename the old file so migration doesn't run again
     let done_path = toml_path.with_extension("toml.migrated");

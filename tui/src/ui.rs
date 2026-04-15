@@ -16,23 +16,35 @@ use crate::todo::item_at;
 pub fn render(frame: &mut Frame, app: &mut AppState) {
     let size = frame.area();
 
+    // Top-level: tab bar + content + status bar
+    let has_tabs = app.tabs.len() > 1 || !app.views.is_empty();
+    let tab_bar_height = if has_tabs { 1 } else { 0 };
+
     if app.show_detail_panel {
-        // Sidebar mode: tree (left) | full detail panel (right)
+        // Sidebar mode: tab bar | tree (left) | detail panel (right) | status bar
         let outer_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(tab_bar_height),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
             .split(size);
+
+        if has_tabs {
+            render_tab_bar(frame, outer_chunks[0], app);
+        }
 
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(outer_chunks[0]);
+            .split(outer_chunks[1]);
 
         render_tree(frame, main_chunks[0], app);
         render_detail_sidebar(frame, main_chunks[1], app);
-        render_status_bar(frame, outer_chunks[1], app);
+        render_status_bar(frame, outer_chunks[2], app);
     } else {
-        // Compact mode: tree + optional bottom strip
+        // Compact mode: tab bar | tree | detail strip | status bar
         let detail_height = app.current_item().map_or(0, |item| {
             let has_desc = item.description.as_ref().map_or(false, |d| !d.trim().is_empty());
             if has_desc { 5 } else { 4 }
@@ -41,17 +53,21 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
         let outer_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
+                Constraint::Length(tab_bar_height),
                 Constraint::Min(1),
                 Constraint::Length(detail_height),
                 Constraint::Length(1),
             ])
             .split(size);
 
-        render_tree(frame, outer_chunks[0], app);
-        if detail_height > 0 {
-            render_detail_strip(frame, outer_chunks[1], app);
+        if has_tabs {
+            render_tab_bar(frame, outer_chunks[0], app);
         }
-        render_status_bar(frame, outer_chunks[2], app);
+        render_tree(frame, outer_chunks[1], app);
+        if detail_height > 0 {
+            render_detail_strip(frame, outer_chunks[2], app);
+        }
+        render_status_bar(frame, outer_chunks[3], app);
     }
 
     if let Some(ref popup) = app.popup {
@@ -61,6 +77,13 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
             PopupKind::SetStatus { .. } => render_status_popup(frame, size, app),
             PopupKind::AddStatus { .. } => render_add_status_popup(frame, size, app),
             PopupKind::ConfirmDelete => render_confirm_delete_popup(frame, size),
+            PopupKind::EditTags { .. } => render_tag_editor_popup(frame, size, app),
+            PopupKind::CreateTabName { .. } => render_create_tab_popup(frame, size, app),
+            PopupKind::RenameTab { .. } => render_rename_tab_popup(frame, size, app),
+            PopupKind::TabPicker { .. } => render_tab_picker_popup(frame, size, app),
+            PopupKind::ConfirmDeleteTab => render_confirm_delete_tab_popup(frame, size),
+            PopupKind::ViewPicker { .. } => render_view_picker_popup(frame, size, app),
+            PopupKind::CreateView { .. } => render_create_view_popup(frame, size, app),
             PopupKind::Help => render_help_popup(frame, size),
         }
     }
@@ -74,8 +97,14 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
 }
 
 fn render_tree(frame: &mut Frame, area: Rect, app: &mut AppState) {
+    let title = if let Some(view_idx) = app.active_view {
+        let name = app.views.get(view_idx).map(|v| v.name.as_str()).unwrap_or("View");
+        format!(" View: {} ", name)
+    } else {
+        format!(" {} ", app.active_tab_name())
+    };
     let block = Block::default()
-        .title(" Todos ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
 
@@ -159,6 +188,13 @@ fn render_tree(frame: &mut Frame, area: Rect, app: &mut AppState) {
                 Span::styled(format!("{} ", icon), Style::default().fg(status_color)),
             ];
             spans.extend(title_spans);
+            for tag in &item.tags {
+                let tag_color = tag_to_color(tag);
+                spans.push(Span::styled(
+                    format!(" [{}]", tag),
+                    Style::default().fg(tag_color),
+                ));
+            }
             if !time_str.is_empty() {
                 let time_style = if item.timer.is_running() {
                     Style::default().fg(Color::Yellow)
@@ -292,6 +328,22 @@ fn render_detail_sidebar(frame: &mut Frame, area: Rect, app: &AppState) {
         )));
     }
 
+    // Tags
+    if !item.tags.is_empty() {
+        lines.push(Line::from(""));
+        let mut tag_spans: Vec<Span> = vec![Span::styled("tags     ", dim)];
+        for (i, tag) in item.tags.iter().enumerate() {
+            if i > 0 {
+                tag_spans.push(Span::raw(" "));
+            }
+            tag_spans.push(Span::styled(
+                format!("[{}]", tag),
+                Style::default().fg(tag_to_color(tag)),
+            ));
+        }
+        lines.push(Line::from(tag_spans));
+    }
+
     // Description
     if let Some(ref desc) = item.description {
         let trimmed = desc.trim();
@@ -395,7 +447,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     } else if let Some(ref q) = app.search_query {
         format!("/{q}  (n/N: next/prev  Esc: clear)")
     } else {
-        "a:add  A:child  dd:del  e:edit  E:desc  H/L:indent  J/K:move  spc:done  s:status  t:timer  p:panel  /:search  ?:help  q:quit".to_string()
+        "a:add  dd:del  e:edit  #:tags  Tab:tabs  c:new tab  m:move  v:views  spc:done  s:status  t:timer  /:search  ?:help  q:quit".to_string()
     };
 
     let (sync_str, sync_color) = match &app.sync_status {
@@ -587,7 +639,7 @@ fn render_confirm_delete_popup(frame: &mut Frame, size: Rect) {
 }
 
 fn render_help_popup(frame: &mut Frame, size: Rect) {
-    let area = centered_rect(70, 26, size);
+    let area = centered_rect(70, 38, size);
     frame.render_widget(Clear, area);
     let block = Block::default()
         .title(" Help  [Esc/?/q] close ")
@@ -611,13 +663,25 @@ fn render_help_popup(frame: &mut Frame, size: Rect) {
         Line::from("  J/K       Move task down/up (same level)"),
         Line::from("  H/L       Dedent/Indent task  (also >/< )"),
         Line::from(""),
-        Line::from(Span::styled("Status", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from("  Space     Toggle Done / Todo"),
-        Line::from("  s         Status picker (all statuses)"),
+        Line::from(Span::styled("Tags", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  #         Edit tags on current task"),
+        Line::from("            Enter: add tag  Ctrl+d: remove  Esc: confirm"),
         Line::from(""),
-        Line::from(Span::styled("Time Tracking", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from("  t         Toggle timer"),
-        Line::from("  T         Stop all timers"),
+        Line::from(Span::styled("Tabs", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  Tab       Next tab"),
+        Line::from("  Shift+Tab Previous tab"),
+        Line::from("  c         Create new tab"),
+        Line::from("  r         Rename current tab"),
+        Line::from("  m         Move task to another tab"),
+        Line::from("  X         Delete current tab"),
+        Line::from(""),
+        Line::from(Span::styled("Views", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  v         Open view picker / create view"),
+        Line::from("  Esc       Exit current view"),
+        Line::from(""),
+        Line::from(Span::styled("Status & Time", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  Space     Toggle Done / Todo"),
+        Line::from("  s         Status picker     t/T: timer / stop all"),
         Line::from(""),
         Line::from(Span::styled("Search & UI", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  /         Search  n/N next/prev"),
@@ -669,5 +733,307 @@ fn status_icon(status: &str) -> &'static str {
         "Cancelled"  => "⊘",
         "In Progress" => "●",
         _            => "○",
+    }
+}
+
+/// Deterministic color for a tag name based on a simple hash.
+fn tag_to_color(tag: &str) -> Color {
+    const PALETTE: &[Color] = &[
+        Color::Cyan,
+        Color::Magenta,
+        Color::LightBlue,
+        Color::LightGreen,
+        Color::LightYellow,
+        Color::LightRed,
+        Color::LightMagenta,
+        Color::LightCyan,
+    ];
+    let hash: usize = tag.bytes().fold(0usize, |acc, b| acc.wrapping_mul(31).wrapping_add(b as usize));
+    PALETTE[hash % PALETTE.len()]
+}
+
+fn render_tag_editor_popup(frame: &mut Frame, area: Rect, app: &mut AppState) {
+    let popup_width = 50u16.min(area.width.saturating_sub(4));
+    let popup_height = 14u16.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .title(" Edit Tags (Esc to confirm) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    if let Some(PopupKind::EditTags { ref mut textarea, ref existing, ref selected }) = app.popup {
+        let selected = *selected;
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),  // hint
+                Constraint::Min(1),     // existing tags list
+                Constraint::Length(1),  // separator
+                Constraint::Length(1),  // input label
+                Constraint::Length(1),  // input
+            ])
+            .split(inner);
+
+        let hint = Paragraph::new(Line::from(vec![
+            Span::styled("  \u{2191}\u{2193}", Style::default().fg(Color::White)),
+            Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Ctrl+d", Style::default().fg(Color::White)),
+            Span::styled(" remove  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Enter", Style::default().fg(Color::White)),
+            Span::styled(" add  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Esc", Style::default().fg(Color::White)),
+            Span::styled(" confirm", Style::default().fg(Color::DarkGray)),
+        ]));
+        frame.render_widget(hint, chunks[0]);
+
+        // Existing tags
+        let tag_items: Vec<ListItem> = existing
+            .iter()
+            .enumerate()
+            .map(|(i, tag)| {
+                let style = if i == selected {
+                    Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(tag_to_color(tag))
+                };
+                ListItem::new(format!("  [{}]", tag)).style(style)
+            })
+            .collect();
+        if tag_items.is_empty() {
+            let empty = Paragraph::new("  (no tags)")
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(empty, chunks[1]);
+        } else {
+            let list = List::new(tag_items);
+            frame.render_widget(list, chunks[1]);
+        }
+
+        let label = Paragraph::new("Add tag:")
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(label, chunks[3]);
+
+        frame.render_widget(&*textarea, chunks[4]);
+    }
+}
+
+fn render_tab_bar(frame: &mut Frame, area: Rect, app: &AppState) {
+    let mut spans: Vec<Span> = Vec::new();
+    let in_view = app.active_view.is_some();
+    for (i, tab) in app.tabs.iter().enumerate() {
+        let is_active = i == app.active_tab_idx && !in_view;
+        let tab_color = parse_color(&tab.color);
+        if is_active {
+            spans.push(Span::styled(
+                format!(" {} ", tab.name),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(tab_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                format!(" {} ", tab.name),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        if i + 1 < app.tabs.len() || !app.views.is_empty() {
+            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+        }
+    }
+    // Render views after tabs
+    for (i, view) in app.views.iter().enumerate() {
+        let is_active = app.active_view == Some(i);
+        if is_active {
+            spans.push(Span::styled(
+                format!(" {} ", view.name),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                format!(" {} ", view.name),
+                Style::default().fg(Color::Cyan),
+            ));
+        }
+        if i + 1 < app.views.len() {
+            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+        }
+    }
+    let line = Line::from(spans);
+    let para = Paragraph::new(line).style(Style::default().bg(Color::Reset));
+    frame.render_widget(para, area);
+}
+
+fn render_create_tab_popup(frame: &mut Frame, area: Rect, app: &mut AppState) {
+    let popup_width = 40u16.min(area.width.saturating_sub(4));
+    let popup_height = 5u16;
+    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .title(" New Tab ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    if let Some(PopupKind::CreateTabName { ref mut textarea }) = app.popup {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(inner);
+        let label = Paragraph::new("Tab name:").style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(label, chunks[0]);
+        frame.render_widget(&*textarea, chunks[1]);
+    }
+}
+
+fn render_rename_tab_popup(frame: &mut Frame, area: Rect, app: &mut AppState) {
+    let popup_width = 40u16.min(area.width.saturating_sub(4));
+    let popup_height = 5u16;
+    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .title(" Rename Tab ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    if let Some(PopupKind::RenameTab { ref mut textarea }) = app.popup {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(inner);
+        let label = Paragraph::new("New name:").style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(label, chunks[0]);
+        frame.render_widget(&*textarea, chunks[1]);
+    }
+}
+
+fn render_tab_picker_popup(frame: &mut Frame, area: Rect, app: &AppState) {
+    if let Some(PopupKind::TabPicker { ref options, selected }) = app.popup {
+        let popup_height = (options.len() as u16 + 3).min(area.height.saturating_sub(4));
+        let popup_width = 35u16.min(area.width.saturating_sub(4));
+        let x = (area.width.saturating_sub(popup_width)) / 2;
+        let y = (area.height.saturating_sub(popup_height)) / 2;
+        let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+        frame.render_widget(Clear, popup_area);
+        let block = Block::default()
+            .title(" Move to Tab ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+
+        let items: Vec<ListItem> = options
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| {
+                let style = if i == selected {
+                    Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("  {}", name)).style(style)
+            })
+            .collect();
+        let list = List::new(items);
+        frame.render_widget(list, inner);
+    }
+}
+
+fn render_confirm_delete_tab_popup(frame: &mut Frame, area: Rect) {
+    let popup_width = 40u16.min(area.width.saturating_sub(4));
+    let popup_height = 4u16;
+    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .title(" Delete Tab? ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let msg = Paragraph::new("Delete this tab and all items? (y/n)")
+        .style(Style::default().fg(Color::Red));
+    frame.render_widget(msg, inner);
+}
+
+fn render_view_picker_popup(frame: &mut Frame, area: Rect, app: &AppState) {
+    if let Some(PopupKind::ViewPicker { ref options, selected }) = app.popup {
+        let popup_height = (options.len() as u16 + 3).min(area.height.saturating_sub(4));
+        let popup_width = 35u16.min(area.width.saturating_sub(4));
+        let x = (area.width.saturating_sub(popup_width)) / 2;
+        let y = (area.height.saturating_sub(popup_height)) / 2;
+        let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+        frame.render_widget(Clear, popup_area);
+        let block = Block::default()
+            .title(" Views (d to delete) ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+
+        let items: Vec<ListItem> = options
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let style = if i == selected {
+                    Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+                } else if name.starts_with('+') {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::Cyan)
+                };
+                ListItem::new(format!("  {}", name)).style(style)
+            })
+            .collect();
+        let list = List::new(items);
+        frame.render_widget(list, inner);
+    }
+}
+
+fn render_create_view_popup(frame: &mut Frame, area: Rect, app: &mut AppState) {
+    let popup_width = 40u16.min(area.width.saturating_sub(4));
+    let popup_height = 5u16;
+    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .title(" New View ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    if let Some(PopupKind::CreateView { ref mut textarea }) = app.popup {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(inner);
+        let label = Paragraph::new("Tag to filter by:").style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(label, chunks[0]);
+        frame.render_widget(&*textarea, chunks[1]);
     }
 }

@@ -81,9 +81,23 @@ fn handle_normal_key(app: &mut AppState, key: KeyEvent) {
         KeyCode::Char('n')                  => app.next_match(),
         KeyCode::Char('N')                  => app.prev_match(),
         KeyCode::Char('p')                  => app.toggle_detail_panel(),
+        KeyCode::Char('#')                  => app.open_tag_editor(),
+        KeyCode::Tab                        => app.next_tab(),
+        KeyCode::BackTab                    => app.prev_tab(),
+        KeyCode::Char('c')                  => app.open_create_tab(),
+        KeyCode::Char('r')                  => app.open_rename_tab(),
+        KeyCode::Char('m')                  => app.open_move_to_tab(),
+        KeyCode::Char('X')                  => app.open_confirm_delete_tab(),
+        KeyCode::Char('v')                  => app.open_view_picker(),
         KeyCode::Char('?')                  => { app.popup = Some(PopupKind::Help); }
         KeyCode::Char('q')                  => { app.save_and_quit(); }
-        KeyCode::Esc                        => { app.pending_key = None; }
+        KeyCode::Esc                        => {
+            if app.active_view.is_some() {
+                app.deactivate_view();
+            } else {
+                app.pending_key = None;
+            }
+        }
         _ => {}
     }
 }
@@ -128,6 +142,13 @@ fn handle_popup_key(app: &mut AppState, key: KeyEvent) {
         Some(PopupKind::SetStatus { .. }) => handle_status_picker_key(app, key),
         Some(PopupKind::AddStatus { .. }) => handle_add_status_key(app, key),
         Some(PopupKind::ConfirmDelete) => handle_confirm_delete_key(app, key),
+        Some(PopupKind::EditTags { .. }) => handle_tag_editor_key(app, key),
+        Some(PopupKind::CreateTabName { .. }) => handle_create_tab_key(app, key),
+        Some(PopupKind::RenameTab { .. }) => handle_rename_tab_key(app, key),
+        Some(PopupKind::TabPicker { .. }) => handle_tab_picker_key(app, key),
+        Some(PopupKind::ConfirmDeleteTab) => handle_confirm_delete_tab_key(app, key),
+        Some(PopupKind::ViewPicker { .. }) => handle_view_picker_key(app, key),
+        Some(PopupKind::CreateView { .. }) => handle_create_view_key(app, key),
         Some(PopupKind::Help) => {
             if matches!(key.code, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?')) {
                 app.popup = None;
@@ -281,6 +302,239 @@ fn handle_confirm_delete_key(app: &mut AppState, key: KeyEvent) {
             app.popup = None;
         }
         _ => {}
+    }
+}
+
+fn handle_create_tab_key(app: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Enter => {
+            let name = if let Some(PopupKind::CreateTabName { ref textarea }) = app.popup {
+                textarea.lines().join("").trim().to_string()
+            } else {
+                String::new()
+            };
+            app.popup = None;
+            app.mode = Mode::Normal;
+            app.apply_create_tab(name);
+        }
+        KeyCode::Esc => {
+            app.popup = None;
+            app.mode = Mode::Normal;
+        }
+        _ => {
+            if let Some(PopupKind::CreateTabName { ref mut textarea }) = app.popup {
+                textarea.input(key);
+            }
+        }
+    }
+}
+
+fn handle_rename_tab_key(app: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Enter => {
+            let name = if let Some(PopupKind::RenameTab { ref textarea }) = app.popup {
+                textarea.lines().join("").trim().to_string()
+            } else {
+                String::new()
+            };
+            app.popup = None;
+            app.mode = Mode::Normal;
+            app.apply_rename_tab(name);
+        }
+        KeyCode::Esc => {
+            app.popup = None;
+            app.mode = Mode::Normal;
+        }
+        _ => {
+            if let Some(PopupKind::RenameTab { ref mut textarea }) = app.popup {
+                textarea.input(key);
+            }
+        }
+    }
+}
+
+fn handle_tab_picker_key(app: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(PopupKind::TabPicker { ref options, ref mut selected }) = app.popup {
+                if *selected + 1 < options.len() {
+                    *selected += 1;
+                }
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(PopupKind::TabPicker { ref mut selected, .. }) = app.popup {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+        }
+        KeyCode::Enter => {
+            let target = if let Some(PopupKind::TabPicker { ref options, selected }) = app.popup {
+                options.get(selected).map(|(_, idx)| *idx)
+            } else {
+                None
+            };
+            app.popup = None;
+            if let Some(idx) = target {
+                app.move_item_to_tab(idx);
+            }
+        }
+        KeyCode::Esc => {
+            app.popup = None;
+        }
+        _ => {}
+    }
+}
+
+fn handle_confirm_delete_tab_key(app: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => {
+            app.popup = None;
+            app.delete_current_tab();
+        }
+        KeyCode::Char('n') | KeyCode::Esc => {
+            app.popup = None;
+        }
+        _ => {}
+    }
+}
+
+fn handle_view_picker_key(app: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(PopupKind::ViewPicker { ref options, ref mut selected }) = app.popup {
+                if *selected + 1 < options.len() {
+                    *selected += 1;
+                }
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(PopupKind::ViewPicker { ref mut selected, .. }) = app.popup {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+        }
+        KeyCode::Enter => {
+            let (is_new, idx) = if let Some(PopupKind::ViewPicker { ref options, selected }) = app.popup {
+                if selected == options.len() - 1 {
+                    (true, 0)
+                } else {
+                    (false, selected)
+                }
+            } else {
+                (false, 0)
+            };
+            app.popup = None;
+            if is_new {
+                app.open_create_view();
+            } else {
+                app.activate_view(idx);
+            }
+        }
+        KeyCode::Char('d') => {
+            // Delete the selected view
+            let idx = if let Some(PopupKind::ViewPicker { ref options, selected }) = app.popup {
+                if selected < options.len() - 1 { Some(selected) } else { None }
+            } else {
+                None
+            };
+            if let Some(idx) = idx {
+                app.popup = None;
+                app.delete_view(idx);
+            }
+        }
+        KeyCode::Esc => {
+            app.popup = None;
+        }
+        _ => {}
+    }
+}
+
+fn handle_create_view_key(app: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Enter => {
+            let tag = if let Some(PopupKind::CreateView { ref textarea }) = app.popup {
+                textarea.lines().join("").trim().to_string()
+            } else {
+                String::new()
+            };
+            app.popup = None;
+            app.mode = Mode::Normal;
+            app.apply_create_view(tag);
+        }
+        KeyCode::Esc => {
+            app.popup = None;
+            app.mode = Mode::Normal;
+        }
+        _ => {
+            if let Some(PopupKind::CreateView { ref mut textarea }) = app.popup {
+                textarea.input(key);
+            }
+        }
+    }
+}
+
+fn handle_tag_editor_key(app: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Enter => {
+            // Add the typed tag to existing list
+            let tag = if let Some(PopupKind::EditTags { ref textarea, .. }) = app.popup {
+                textarea.lines().join("").trim().to_string()
+            } else {
+                String::new()
+            };
+            if !tag.is_empty() {
+                if let Some(PopupKind::EditTags { ref mut textarea, ref mut existing, .. }) = app.popup {
+                    if !existing.contains(&tag) {
+                        existing.push(tag);
+                    }
+                    *textarea = crate::input::new_textarea("");
+                }
+            }
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Remove selected tag
+            if let Some(PopupKind::EditTags { ref mut existing, ref mut selected, .. }) = app.popup {
+                if !existing.is_empty() {
+                    existing.remove(*selected);
+                    if *selected >= existing.len() && *selected > 0 {
+                        *selected -= 1;
+                    }
+                }
+            }
+        }
+        KeyCode::Up => {
+            if let Some(PopupKind::EditTags { ref mut selected, .. }) = app.popup {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+        }
+        KeyCode::Down => {
+            if let Some(PopupKind::EditTags { ref existing, ref mut selected, .. }) = app.popup {
+                if *selected + 1 < existing.len() {
+                    *selected += 1;
+                }
+            }
+        }
+        KeyCode::Esc => {
+            // Confirm: apply tags and close
+            let tags = if let Some(PopupKind::EditTags { ref existing, .. }) = app.popup {
+                existing.clone()
+            } else {
+                Vec::new()
+            };
+            app.popup = None;
+            app.mode = Mode::Normal;
+            app.apply_tags(tags);
+        }
+        _ => {
+            if let Some(PopupKind::EditTags { ref mut textarea, .. }) = app.popup {
+                textarea.input(key);
+            }
+        }
     }
 }
 
