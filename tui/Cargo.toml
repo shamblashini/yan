@@ -1,7 +1,10 @@
 [package]
 name = "yan"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+description = "A TUI client for YAN"
+license = "MIT""
+repository = "https://github.com/shamblashini/yan"
 
 [dependencies]
 yan-shared = { path = "../shared" }
