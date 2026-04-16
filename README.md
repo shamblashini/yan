@@ -5,11 +5,33 @@ Because, of course you need ANOTHER todo TUI with lazy[insertutilname] syle and 
 *I will now proceed to force everyone to used it via advanced comoputer hypnosis*
 
 ## preview
-<img width="616" height="1029" alt="image" src="https://github.com/user-attachments/assets/e85c9aaa-c8d3-41cf-b247-4e5b8469d8b0" />
+<img width="513" height="1030" alt="image" src="https://github.com/user-attachments/assets/c703e7f7-3fd5-4352-9083-461f5dcfdc81" />
+<img width="438" height="642" alt="image" src="https://github.com/user-attachments/assets/5ad1f2e4-ccb1-40ac-9136-2c0c1993957c" />
 
-the rest is written by AI, read at your own risk
+## Quickstart
+the TUI works without a server (in loacl only mode, no sync), to use, please clone the repo, build and install the /tui
+```
+git clone https://github.com/shamblashini/yan.git
+cd yan/tui
+cargo install --path .
+```
+> make sure your shell resolves rust install dir
+
+if you want to install the sync server, you can use the docker image
+```
+docker pull ghcr.io/shamblashini/yan/server:latest
+```
+
+## plans
+
+- [X] tabs (spaces of tasks)
+- [X] tags & views (ability to tag tasks and view tasks with specific tags)
+- [ ] notes (add note tasks without a status but with the ability to wrap text)
+- [ ] clear/hide compleated tasks (maybe with animation)
 
 ---
+
+below is a more detailed description of the archetecture and requirements, written by AI, enter at your own risk
 
 ## Table of Contents
 
