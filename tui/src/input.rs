@@ -81,6 +81,7 @@ fn handle_normal_key(app: &mut AppState, key: KeyEvent) {
         KeyCode::Char('n')                  => app.next_match(),
         KeyCode::Char('N')                  => app.prev_match(),
         KeyCode::Char('p')                  => app.toggle_detail_panel(),
+        KeyCode::Char('o')                  => app.toggle_show_completed(),
         KeyCode::Char('#')                  => app.open_tag_editor(),
         KeyCode::Tab                        => app.next_tab(),
         KeyCode::BackTab                    => app.prev_tab(),

@@ -13,6 +13,7 @@ use crate::app::{AppState, PopupKind};
 use crate::sync_client::SyncStatus;
 use crate::time_tracker::{format_duration, total_elapsed};
 use crate::todo::item_at;
+use yan_shared::models::{child_completion, count_tidied, is_tidied};
 
 pub fn render(frame: &mut Frame, app: &mut AppState) {
     let size = frame.area();
@@ -187,14 +188,21 @@ fn render_tree(frame: &mut Frame, area: Rect, app: &mut AppState) {
         };
 
         let is_selected = i == app.cursor_idx;
-        let title_style = if is_selected {
+        let tidied = is_tidied(&item.status);
+
+        // Tidied (Done/Cancelled) tasks render with dim foreground + strikethrough,
+        // overriding the bold-when-selected styling for the title text. The cursor
+        // indicator itself stays full-color so the selection is still obvious.
+        let title_style = if tidied {
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
+        } else if is_selected {
             Style::default().add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
 
         let title_spans: Vec<(String, Style)> = if let Some(ref q) = search {
-            if !q.is_empty() {
+            if !q.is_empty() && !tidied {
                 highlight_match(&item.title, q, is_selected)
                     .into_iter()
                     .map(|s| (s.content.to_string(), s.style))
@@ -209,13 +217,34 @@ fn render_tree(frame: &mut Frame, area: Rect, app: &mut AppState) {
         let select_indicator = if is_selected { "❯ " } else { "  " };
         let select_style = if is_selected { Style::default().fg(Color::Cyan) } else { Style::default() };
 
+        let icon_style = if tidied {
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
+        } else {
+            Style::default().fg(status_color)
+        };
+
         let mut spans_before_tags: Vec<(String, Style)> = vec![
             (select_indicator.into(), select_style),
             (indent, Style::default()),
             (collapse_icon.into(), Style::default().fg(Color::DarkGray)),
-            (format!("{} ", icon), Style::default().fg(status_color)),
+            (format!("{} ", icon), icon_style),
         ];
         spans_before_tags.extend(title_spans);
+
+        // Per-parent completion counter: " [d/t]" appended after the title.
+        // Counts direct children only; Done and Cancelled both count toward d.
+        // Renders green at full completion, dim grey otherwise; matches the
+        // tidied dim+strikethrough when the parent itself is tidied.
+        if let Some((d, t)) = child_completion(item) {
+            let counter_style = if tidied {
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
+            } else if d == t {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            spans_before_tags.push((format!(" [{}/{}]", d, t), counter_style));
+        }
 
         let prefix_width: usize = spans_before_tags.iter().map(|(s, _)| s.width()).sum();
 
@@ -534,7 +563,16 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     } else if let Some(ref q) = app.search_query {
         format!("/{q}  (n/N: next/prev  Esc: clear)")
     } else {
-        "a:add  dd:del  e:edit  #:tags  Tab:tabs  c:new tab  m:move  v:views  spc:done  s:status  t:timer  /:search  ?:help  q:quit".to_string()
+        "a:add  dd:del  e:edit  #:tags  Tab:tabs  c:new tab  m:move  v:views  spc:done  s:status  t:timer  o:hide done  /:search  ?:help  q:quit".to_string()
+    };
+
+    // When completed tasks are hidden, surface the count so the user knows
+    // they're filtered. Counts across the active tree only (not all tabs).
+    let hidden_str = if !app.show_completed {
+        let n = count_tidied(&app.roots);
+        if n > 0 { format!(" · {n} hidden") } else { String::new() }
+    } else {
+        String::new()
     };
 
     let (sync_str, sync_color) = match &app.sync_status {
@@ -563,7 +601,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &AppState) {
         .style(Style::default().fg(Color::Black).bg(mode_color).add_modifier(Modifier::BOLD));
     frame.render_widget(mode_widget, chunks[0]);
 
-    let hint_widget = Paragraph::new(format!("  {hint}"))
+    let hint_widget = Paragraph::new(format!("  {hint}{hidden_str}"))
         .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(hint_widget, chunks[1]);
 
@@ -775,6 +813,7 @@ fn render_help_popup(frame: &mut Frame, size: Rect) {
         Line::from(Span::styled("Search & UI", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  /         Search  n/N next/prev"),
         Line::from("  p         Toggle detail panel"),
+        Line::from("  o         Toggle hide completed (Done/Cancelled)"),
         Line::from("  q         Save & quit"),
     ];
 

@@ -67,6 +67,7 @@ async fn main() -> io::Result<()> {
         cfg.device_id,
         initial_seq,
         initial_collapsed,
+        cfg.show_completed,
         Some(local_op_tx),
         Some(remote_op_rx),
         Some(status_rx),

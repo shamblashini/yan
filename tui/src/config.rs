@@ -19,6 +19,14 @@ pub struct Config {
     /// Whether sync is enabled. Requires server_url and auth_token.
     #[serde(default)]
     pub sync_enabled: bool,
+    /// When false, completed (Done/Cancelled) tasks are hidden from the tree.
+    /// Defaults to true so existing users see no behavior change.
+    #[serde(default = "default_show_completed")]
+    pub show_completed: bool,
+}
+
+fn default_show_completed() -> bool {
+    true
 }
 
 impl Config {
@@ -51,6 +59,7 @@ pub fn load() -> Config {
         server_url: String::new(),
         auth_token: String::new(),
         sync_enabled: false,
+        show_completed: true,
     };
     let _ = save(&cfg);
     cfg

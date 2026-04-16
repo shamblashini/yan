@@ -204,6 +204,33 @@ pub fn check_parent_completion(roots: &mut Vec<TodoItem>, path: &[usize]) {
     check_parent_completion(roots, parent_path);
 }
 
+/// Statuses that count as "completed" for tidy / hide / counter purposes.
+/// Both `Done` and `Cancelled` are treated as tidied: they fold into the parent
+/// counter and disappear when the user toggles `show_completed` off.
+pub fn is_tidied(status: &str) -> bool {
+    status == "Done" || status == "Cancelled"
+}
+
+/// `(tidied_direct_children, total_direct_children)` for a parent task.
+/// Returns `None` if the item has no children.
+pub fn child_completion(item: &TodoItem) -> Option<(usize, usize)> {
+    if item.children.is_empty() {
+        return None;
+    }
+    let total = item.children.len();
+    let done = item.children.iter().filter(|c| is_tidied(&c.status)).count();
+    Some((done, total))
+}
+
+/// Recursively count tidied items in a forest. Used for the status-bar
+/// "N hidden" hint when `hide_done` is active.
+pub fn count_tidied(items: &[TodoItem]) -> usize {
+    items
+        .iter()
+        .map(|i| (if is_tidied(&i.status) { 1 } else { 0 }) + count_tidied(&i.children))
+        .sum()
+}
+
 pub fn flatten_node(
     item: &TodoItem,
     path: &[usize],
@@ -211,7 +238,11 @@ pub fn flatten_node(
     collapsed: &HashSet<Uuid>,
     out: &mut Vec<(usize, CursorPath)>,
     search: Option<&str>,
+    hide_done: bool,
 ) {
+    if hide_done && is_tidied(&item.status) {
+        return;
+    }
     let matches_search = search.map_or(true, |q| subtree_matches(item, q));
     if !matches_search {
         return;
@@ -221,7 +252,7 @@ pub fn flatten_node(
         for (i, child) in item.children.iter().enumerate() {
             let mut child_path = path.to_vec();
             child_path.push(i);
-            flatten_node(child, &child_path, depth + 1, collapsed, out, search);
+            flatten_node(child, &child_path, depth + 1, collapsed, out, search, hide_done);
         }
     }
 }

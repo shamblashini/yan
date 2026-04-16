@@ -62,6 +62,9 @@ pub struct AppState {
     pub status_message: Option<String>,
     pub should_quit: bool,
     pub show_detail_panel: bool,
+    /// When false, Done/Cancelled tasks are filtered out of `visible_flat`.
+    /// Toggled by `o` and persisted to `config.toml`.
+    pub show_completed: bool,
     // ── Sync / persistence ──────────────────────────────────────────────────
     db: Connection,
     device_id: Uuid,
@@ -100,6 +103,7 @@ impl AppState {
         device_id: Uuid,
         initial_seq: u64,
         initial_collapsed: HashSet<Uuid>,
+        show_completed: bool,
         local_op_tx: Option<mpsc::Sender<Operation>>,
         remote_op_rx: Option<mpsc::Receiver<Vec<Operation>>>,
         sync_status_rx: Option<watch::Receiver<SyncStatus>>,
@@ -139,6 +143,7 @@ impl AppState {
             status_message: None,
             should_quit: false,
             show_detail_panel: false,
+            show_completed,
             db,
             device_id,
             next_seq: initial_seq,
@@ -326,21 +331,45 @@ impl AppState {
     pub fn rebuild_visible(&mut self) {
         self.visible_flat.clear();
         let search = self.search_query.as_deref();
+        let hide_done = !self.show_completed;
 
         if self.active_view.is_some() {
             // View mode: self.roots contains the filtered view items
             for (i, root) in self.roots.iter().enumerate() {
-                flatten_node(root, &[i], 0, &self.collapsed, &mut self.visible_flat, search);
+                flatten_node(root, &[i], 0, &self.collapsed, &mut self.visible_flat, search, hide_done);
             }
         } else {
             for (i, root) in self.roots.iter().enumerate() {
-                flatten_node(root, &[i], 0, &self.collapsed, &mut self.visible_flat, search);
+                flatten_node(root, &[i], 0, &self.collapsed, &mut self.visible_flat, search, hide_done);
             }
         }
 
         if !self.visible_flat.is_empty() && self.cursor_idx >= self.visible_flat.len() {
             self.cursor_idx = self.visible_flat.len() - 1;
         }
+    }
+
+    /// Toggle the show/hide-completed flag, persist to config, rebuild the view,
+    /// and clamp the cursor in case it now points past the last visible row.
+    pub fn toggle_show_completed(&mut self) {
+        self.show_completed = !self.show_completed;
+        // Persist: load current config from disk, mutate, save. We do this rather
+        // than threading a Config handle into AppState because no other state needs it.
+        let mut cfg = crate::config::load();
+        cfg.show_completed = self.show_completed;
+        let _ = crate::config::save(&cfg);
+        self.rebuild_visible();
+        if self.visible_flat.is_empty() {
+            self.cursor_idx = 0;
+        } else if self.cursor_idx >= self.visible_flat.len() {
+            self.cursor_idx = self.visible_flat.len() - 1;
+        }
+        self.update_scroll();
+        self.status_message = Some(if self.show_completed {
+            "Showing completed tasks".into()
+        } else {
+            "Hiding completed tasks".into()
+        });
     }
 
     pub fn current_path(&self) -> Option<&CursorPath> {
