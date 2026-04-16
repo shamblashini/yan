@@ -3,7 +3,7 @@ name = "yan"
 version = "0.2.0"
 edition = "2024"
 description = "A TUI client for YAN"
-license = "MIT""
+license = "MIT"
 repository = "https://github.com/shamblashini/yan"
 
 [dependencies]
