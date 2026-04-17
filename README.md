@@ -208,6 +208,7 @@ The TUI has three modes shown in the bottom-left badge:
 | `A` | Add a child task under the current one |
 | `i` / `e` | Edit the current task's title |
 | `E` | Edit the current task's description |
+| `Ctrl+g` | Open description in external editor (`$EDITOR` / nvim) |
 | `dd` | Delete current task and all its children (with confirmation) |
 | `L` / `>` | Indent — make current item a child of the item above |
 | `H` / `<` | Dedent — promote current item one level up |
@@ -216,10 +217,12 @@ The TUI has three modes shown in the bottom-left badge:
 When you add or edit a title, a popup appears:
 - `Enter` — confirm and save
 - `Esc` — cancel (new items are discarded; existing items keep their old title)
+- `Ctrl+g` — open in external editor (`$EDITOR`, defaults to nvim)
 
 When you edit a description, a multi-line popup appears:
 - `Esc` — confirm and save
 - `Ctrl-C` — cancel
+- `Ctrl+g` — open in external editor (`$EDITOR`, defaults to nvim)
 
 ### Normal Mode — Tags
 
@@ -678,6 +681,7 @@ yan/
 │   └── src/
 │       ├── main.rs             entry point, tokio runtime, channel wiring
 │       ├── app.rs              AppState — all runtime state and mutation methods
+│       ├── editor.rs           external editor integration ($EDITOR / nvim)
 │       ├── input.rs            keyboard event handling
 │       ├── ui.rs               Ratatui rendering
 │       ├── storage.rs          SQLite persistence and operation log

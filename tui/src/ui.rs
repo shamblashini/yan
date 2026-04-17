@@ -563,7 +563,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     } else if let Some(ref q) = app.search_query {
         format!("/{q}  (n/N: next/prev  Esc: clear)")
     } else {
-        "a:add  dd:del  e:edit  #:tags  Tab:tabs  c:new tab  m:move  v:views  spc:done  s:status  t:timer  o:hide done  /:search  ?:help  q:quit".to_string()
+        "a:add  dd:del  e:edit  C-g:$EDITOR  #:tags  Tab:tabs  c:new tab  m:move  v:views  spc:done  s:status  t:timer  o:hide done  /:search  ?:help  q:quit".to_string()
     };
 
     // When completed tasks are hidden, surface the count so the user knows
@@ -654,7 +654,7 @@ fn render_edit_title_popup(frame: &mut Frame, size: Rect, app: &AppState) {
     let area = centered_rect(60, 5, size);
     frame.render_widget(Clear, area);
     let block = Block::default()
-        .title(" Edit Title  [Enter] confirm  [Esc] cancel ")
+        .title(" Edit Title  [Enter] confirm  [Esc] cancel  [Ctrl+g] $EDITOR ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
     if let Some(PopupKind::EditTitle { ref textarea }) = app.popup {
@@ -668,7 +668,7 @@ fn render_edit_desc_popup(frame: &mut Frame, size: Rect, app: &AppState) {
     let area = centered_rect(70, 12, size);
     frame.render_widget(Clear, area);
     let block = Block::default()
-        .title(" Edit Description  [Esc] confirm  [Ctrl-C] cancel ")
+        .title(" Edit Description  [Esc] confirm  [Ctrl-C] cancel  [Ctrl+g] $EDITOR ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
     if let Some(PopupKind::EditDescription { ref textarea }) = app.popup {
@@ -785,6 +785,7 @@ fn render_help_popup(frame: &mut Frame, size: Rect) {
         Line::from("  A         Add child of current"),
         Line::from("  i/e       Edit title"),
         Line::from("  E         Edit description"),
+        Line::from("  Ctrl+g    Open in $EDITOR (nvim)"),
         Line::from("  dd        Delete (confirm)"),
         Line::from("  J/K       Move task down/up (same level)"),
         Line::from("  H/L       Dedent/Indent task  (also >/< )"),

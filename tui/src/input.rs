@@ -1,7 +1,7 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui_textarea::TextArea;
 
-use crate::app::{AppState, PopupKind};
+use crate::app::{AppState, EditorTarget, PopupKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
@@ -52,6 +52,14 @@ fn handle_normal_key(app: &mut AppState, key: KeyEvent) {
                 // Unknown sequence, fall through to single-key handling with the new key
             }
         }
+    }
+
+    // Ctrl+G: open in external editor (before match to avoid conflict with plain 'g')
+    if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if app.current_item().is_some() {
+            app.request_external_editor(EditorTarget::Description);
+        }
+        return;
     }
 
     match key.code {
@@ -181,6 +189,9 @@ fn handle_edit_title_key(app: &mut AppState, key: KeyEvent) {
             app.mode = Mode::Normal;
             app.cancel_edit_title();
         }
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.request_external_editor(EditorTarget::Title);
+        }
         _ => {
             if let Some(PopupKind::EditTitle { ref mut textarea }) = app.popup {
                 textarea.input(key);
@@ -202,6 +213,9 @@ fn handle_edit_desc_key(app: &mut AppState, key: KeyEvent) {
             app.popup = None;
             app.mode = Mode::Normal;
             app.apply_edit_description(if text.is_empty() { None } else { Some(text) });
+        }
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.request_external_editor(EditorTarget::Description);
         }
         _ => {
             if let Some(PopupKind::EditDescription { ref mut textarea }) = app.popup {

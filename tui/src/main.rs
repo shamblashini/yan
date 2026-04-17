@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod editor;
 mod input;
 mod storage;
 mod sync_client;
@@ -100,14 +101,11 @@ async fn main() -> io::Result<()> {
     result
 }
 
-fn run_app<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut AppState,
     tick: Duration,
-) -> io::Result<()>
-where
-    io::Error: From<B::Error>,
-{
+) -> io::Result<()> {
     loop {
         terminal.draw(|f| ui::render(f, app))?;
 
@@ -117,6 +115,41 @@ where
         if event::poll(tick)? {
             let ev = event::read()?;
             input::handle_event(app, ev);
+        }
+
+        // Handle external editor request
+        if let Some(request) = app.editor_request.take() {
+            // Suspend TUI
+            disable_raw_mode()?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            )?;
+            terminal.show_cursor()?;
+
+            // Spawn editor
+            let ext = match request.target {
+                app::EditorTarget::Title => "txt",
+                app::EditorTarget::Description => "md",
+            };
+            let result = editor::edit_in_external(&request.initial_content, ext);
+
+            // Restore TUI
+            enable_raw_mode()?;
+            execute!(
+                terminal.backend_mut(),
+                EnterAlternateScreen,
+                EnableMouseCapture
+            )?;
+            terminal.clear()?;
+
+            match result {
+                Ok(content) => app.apply_external_editor_result(request.target, content),
+                Err(e) => {
+                    app.status_message = Some(format!("Editor error: {}", e));
+                }
+            }
         }
 
         if app.should_quit {

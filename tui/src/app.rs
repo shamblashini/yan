@@ -21,6 +21,16 @@ pub struct TagView {
     pub tag_filter: String,
 }
 
+pub enum EditorTarget {
+    Title,
+    Description,
+}
+
+pub struct EditorRequest {
+    pub target: EditorTarget,
+    pub initial_content: String,
+}
+
 pub enum PopupKind {
     EditTitle { textarea: TextArea<'static> },
     EditDescription { textarea: TextArea<'static> },
@@ -60,6 +70,7 @@ pub struct AppState {
     pub pending_key: Option<char>,
     pub popup: Option<PopupKind>,
     pub status_message: Option<String>,
+    pub editor_request: Option<EditorRequest>,
     pub should_quit: bool,
     pub show_detail_panel: bool,
     /// When false, Done/Cancelled tasks are filtered out of `visible_flat`.
@@ -141,6 +152,7 @@ impl AppState {
             pending_key: None,
             popup: None,
             status_message: None,
+            editor_request: None,
             should_quit: false,
             show_detail_panel: false,
             show_completed,
@@ -1130,6 +1142,52 @@ impl AppState {
 
     pub fn stop_all_timers(&mut self) {
         stop_timers_recursive_emit(&mut self.roots, &self.db, self.device_id, &mut self.next_seq);
+    }
+
+    pub fn request_external_editor(&mut self, target: EditorTarget) {
+        let content = match target {
+            EditorTarget::Title => {
+                if let Some(PopupKind::EditTitle { ref textarea }) = self.popup {
+                    textarea.lines().join(" ").trim().to_string()
+                } else {
+                    self.current_item().map(|i| i.title.clone()).unwrap_or_default()
+                }
+            }
+            EditorTarget::Description => {
+                if let Some(PopupKind::EditDescription { ref textarea }) = self.popup {
+                    textarea.lines().join("\n").trim().to_string()
+                } else {
+                    self.current_item()
+                        .and_then(|i| i.description.clone())
+                        .unwrap_or_default()
+                }
+            }
+        };
+
+        self.popup = None;
+        self.mode = Mode::Normal;
+        self.editor_request = Some(EditorRequest {
+            target,
+            initial_content: content,
+        });
+    }
+
+    pub fn apply_external_editor_result(&mut self, target: EditorTarget, content: String) {
+        match target {
+            EditorTarget::Title => {
+                let trimmed = content.lines().collect::<Vec<_>>().join(" ");
+                let trimmed = trimmed.trim().to_string();
+                if trimmed.is_empty() {
+                    self.cancel_edit_title();
+                } else {
+                    self.apply_edit_title(trimmed);
+                }
+            }
+            EditorTarget::Description => {
+                let trimmed = content.trim().to_string();
+                self.apply_edit_description(if trimmed.is_empty() { None } else { Some(trimmed) });
+            }
+        }
     }
 
     pub fn open_edit_description(&mut self) {
