@@ -27,7 +27,7 @@ docker pull ghcr.io/shamblashini/yan/server:latest
 - [X] tabs (spaces of tasks)
 - [X] tags & views (ability to tag tasks and view tasks with specific tags)
 - [ ] notes (add note tasks without a status but with the ability to wrap text)
-- [ ] clear/hide compleated tasks (maybe with animation)
+- [x] clear/hide compleated tasks (maybe with animation)
 
 ---
 
